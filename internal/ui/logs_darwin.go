@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/geodro/lerd/internal/config"
 	"github.com/geodro/lerd/internal/podman"
 )
 
@@ -24,14 +25,41 @@ func lerdLogPath(unit string) string {
 // isContainerUnit returns true for units that run as detached podman containers
 // (podman run -d). Their logs come from `podman logs`, not the launchd log file.
 //
-// On macOS only a few native services (dnsmasq, watcher, UI) are non-container;
-// everything else — including all worker units — runs as a container.
+// In exec mode, framework workers run as launchd service units; their output
+// goes to the launchd log file instead. Detection uses the plist when present
+// (RunAtLoad = service unit), falling back to the global config for known
+// worker patterns when the plist is absent (unit not yet started or migration
+// cleaned it up before the new plist was written).
 func isContainerUnit(unit string) bool {
 	switch unit {
 	case "lerd-dns", "lerd-watcher", "lerd-ui":
 		return false
 	}
+	home, _ := os.UserHomeDir()
+	plist, err := os.ReadFile(filepath.Join(home, "Library", "LaunchAgents", "lerd."+unit+".plist"))
+	if err == nil {
+		return !strings.Contains(string(plist), "<key>RunAtLoad</key>")
+	}
+	// No plist: fall back to config for known framework worker prefixes.
+	if isFrameworkWorkerUnit(unit) {
+		cfg, _ := config.LoadGlobal()
+		if cfg != nil && cfg.WorkerExecMode() != config.WorkerExecModeContainer {
+			return false
+		}
+	}
 	return true
+}
+
+// isFrameworkWorkerUnit reports whether unit looks like a built-in framework
+// worker. Guards the config-based fallback so infrastructure containers
+// (FPM, nginx, services) are never misclassified as service units.
+func isFrameworkWorkerUnit(unit string) bool {
+	for _, prefix := range []string{"lerd-queue-", "lerd-schedule-", "lerd-horizon-", "lerd-reverb-"} {
+		if strings.HasPrefix(unit, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func serviceRecentLogs(unit string) string {

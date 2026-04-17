@@ -111,11 +111,14 @@ func writeWorkerContainerUnit(unitName, siteName, sitePath, phpVersion, command,
 }
 
 // workerLogHint returns the hint for viewing worker logs on macOS.
-// The hint is the same for both modes: in exec mode the `podman logs`
-// target is the shared FPM container (worker output is interleaved with
-// other exec traffic), in container mode it's the dedicated worker
-// container. We use the log_tail.go path to route the TUI correctly.
+// In exec mode logs go to the launchd log file; in container mode they
+// come from the dedicated worker container.
 func workerLogHint(unitName string) string {
+	cfg, _ := config.LoadGlobal()
+	if cfg != nil && cfg.WorkerExecMode() != config.WorkerExecModeContainer {
+		home, _ := os.UserHomeDir()
+		return "tail -f " + filepath.Join(home, "Library", "Logs", "lerd", unitName+".log")
+	}
 	return "podman logs -f " + unitName
 }
 
