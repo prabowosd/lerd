@@ -318,31 +318,10 @@ func runInstall(_ *cobra.Command, _ []string) error {
 		}
 	}
 
-	// On macOS, DNS runs natively (no container image needed) and DaemonReload
-	// is a no-op, so we can start lerd-dns and configure the resolver here —
-	// before RunParallel — keeping all sudo prompts before the image-pull spinner.
-	if !isDNSContainerUnit() {
-		step("Starting lerd-dns")
-		if err := services.Mgr.Restart("lerd-dns"); err != nil {
-			fmt.Printf("    WARN: %v\n", err)
-		}
-		ok()
-
-		step("Waiting for lerd-dns to be ready")
-		if err := dns.WaitReady(15 * time.Second); err != nil {
-			fmt.Printf("    WARN: %v\n", err)
-		}
-		ok()
-
-		fmt.Println("  --> Configuring DNS resolver")
-		if err := dns.ConfigureResolver(); err != nil {
-			fmt.Printf("    WARN: %v\n", err)
-		}
-	}
-
-	// 7. Pull images sequentially, then build dnsmasq. Sequential output
-	// keeps any sudo password prompt from later steps visible instead of
-	// being clobbered by a live-updating spinner.
+	// 7. Pull images before touching DNS so registry lookups use the system
+	// resolver. On macOS ConfigureResolver() redirects .test queries through
+	// lerd-dns; doing pulls first ensures the system DNS is intact for all
+	// registry traffic (docker.io, ghcr.io, etc.).
 	pullJobs := []BuildJob{
 		{
 			Label: "Pulling nginx:alpine",
@@ -362,6 +341,27 @@ func runInstall(_ *cobra.Command, _ []string) error {
 			continue
 		}
 		ok()
+	}
+
+	// On macOS, DNS runs natively (no container image needed) and DaemonReload
+	// is a no-op, so we can start lerd-dns and configure the resolver here.
+	if !isDNSContainerUnit() {
+		step("Starting lerd-dns")
+		if err := services.Mgr.Restart("lerd-dns"); err != nil {
+			fmt.Printf("    WARN: %v\n", err)
+		}
+		ok()
+
+		step("Waiting for lerd-dns to be ready")
+		if err := dns.WaitReady(15 * time.Second); err != nil {
+			fmt.Printf("    WARN: %v\n", err)
+		}
+		ok()
+
+		fmt.Println("  --> Configuring DNS resolver")
+		if err := dns.ConfigureResolver(); err != nil {
+			fmt.Printf("    WARN: %v\n", err)
+		}
 	}
 
 	// 8. Systemd / services
