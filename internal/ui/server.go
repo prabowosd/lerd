@@ -1378,7 +1378,7 @@ func ensureServiceQuadlet(name string) error {
 	if err != nil {
 		return fmt.Errorf("unknown service %q", name)
 	}
-	if err := podman.WriteContainerUnitFn(quadletName, content); err != nil {
+	if _, err := podman.WriteQuadletDiff(quadletName, content); err != nil {
 		return fmt.Errorf("writing unit for %s: %w", name, err)
 	}
 	return podman.DaemonReloadFn()
