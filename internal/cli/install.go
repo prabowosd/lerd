@@ -343,6 +343,14 @@ func runInstall(_ *cobra.Command, _ []string) error {
 		ok()
 	}
 
+	// Pull/build all service and FPM images before touching DNS. On macOS,
+	// ConfigureResolver() redirects .test DNS through lerd-dns; any registry
+	// pull after that point uses the overridden resolver which may not yet
+	// forward non-.test queries correctly on a fresh install.
+	if lerdSystemd.IsAutostartEnabled() {
+		ensureImages()
+	}
+
 	// On macOS, DNS runs natively (no container image needed) and DaemonReload
 	// is a no-op, so we can start lerd-dns and configure the resolver here.
 	if !isDNSContainerUnit() {
@@ -503,11 +511,6 @@ func runInstall(_ *cobra.Command, _ []string) error {
 	// stopped — `lerd update` running install via re-exec must not flip
 	// disabled units back on.
 	if autostartOn {
-		// Build/pull any images that are still missing — catches PHP FPM builds
-		// that failed earlier (e.g. transient network error) and ensures service
-		// images are available before containers are started.
-		ensureImages()
-
 		// Start installed PHP FPM containers whose images are now available.
 		if fpmVersions, _ := phpDet.ListInstalled(); len(fpmVersions) > 0 {
 			var fpmJobs []BuildJob
