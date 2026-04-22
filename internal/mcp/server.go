@@ -423,7 +423,7 @@ func toolList() []mcpTool {
 		},
 		{
 			Name:        "env_setup",
-			Description: "Configure .env: start services, create DBs, APP_KEY, APP_URL. Run once after clone. For fresh Laravel with DB_CONNECTION=sqlite, call db_set first.",
+			Description: "Configure .env (services, DBs, APP_KEY, APP_URL). Call after site_link, then ALWAYS follow with setup to run migrations. For sqlite DB_CONNECTION, pick db_set first if you want mysql/postgres instead.",
 			InputSchema: mcpSchema{
 				Type: "object",
 				Properties: map[string]mcpProp{
@@ -433,7 +433,7 @@ func toolList() []mcpTool {
 		},
 		{
 			Name:        "setup",
-			Description: "Run the framework's post-install bootstrap steps (migrations, storage:link, etc.). Call after env_setup on a fresh project. Idempotent.",
+			Description: "Run the framework's post-install steps (migrations, storage:link, etc.). MANDATORY after env_setup on new or cloned projects — otherwise migrations never run. Idempotent.",
 			InputSchema: mcpSchema{
 				Type: "object",
 				Properties: map[string]mcpProp{

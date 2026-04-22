@@ -318,14 +318,17 @@ func IsMCPGloballyRegistered() bool {
 	return exec.Command("claude", "mcp", "get", "lerd").Run() == nil
 }
 
-// ensureClaudeMCPRegistered (re)registers lerd with Claude Code at user scope
-// using the remove-then-add idempotent pattern. Safe to call on every install
-// or update: if Claude Code isn't installed, the LookPath guard returns early.
+// ensureClaudeMCPRegistered adds lerd to Claude Code at user scope only when
+// `claude mcp get lerd` reports it missing. Add-only (no remove-then-add) so
+// a failing add can't leave the user unregistered. No-op when claude isn't
+// installed or lerd is already registered.
 func ensureClaudeMCPRegistered() {
 	if _, err := exec.LookPath("claude"); err != nil {
 		return
 	}
-	_ = exec.Command("claude", "mcp", "remove", "-s", "user", "lerd").Run()
+	if exec.Command("claude", "mcp", "get", "lerd").Run() == nil {
+		return
+	}
 	if err := exec.Command("claude", "mcp", "add", "-s", "user", "lerd", "--", "lerd", "mcp").Run(); err != nil {
 		fmt.Printf("  [WARN] could not register lerd with Claude Code: %v\n", err)
 		fmt.Println("  Run manually: claude mcp add -s user lerd -- lerd mcp")
@@ -1157,28 +1160,25 @@ Returns: ` + bt + `{"version": "...", "checks": [{name, status, detail}], "failu
 
 Single-tool tasks are covered by the tool definitions above (e.g. ` + bt + `site_tls` + bt + ` enables HTTPS, ` + bt + `doctor` + bt + ` runs a full diagnostic, ` + bt + `logs` + bt + ` tails FPM/nginx). These flows only cover multi-step compositions where ordering or non-obvious glue matters.
 
-**Bootstrap a new project from scratch** (any framework lerd knows, e.g. laravel, symfony):
+**Bootstrap a new project from scratch, end-to-end** — works for any lerd-known framework (laravel, symfony, etc.). **Run every step, in order. Do not stop until ` + bt + `setup` + bt + ` returns.**
 ` + "```" + `
 project_new(path: "/abs/path/myapp", framework: "laravel")
-// project_new now runs composer install after scaffold, so vendor/ is ready
+// project_new scaffolds AND runs composer install — vendor/ is populated on return
 site_link(path: "/abs/path/myapp")
-env_setup(path: "/abs/path/myapp")    // configures .env, starts services, creates/touches DB
-// Run migrations with the framework's own tool:
-artisan(args: ["migrate"])            // Laravel
-// console(args: ["doctrine:migrations:migrate"])  // Symfony
-// (skip for frameworks that don't use migrations)
-site_tls(action: "enable", site: "myapp")   // optional HTTPS
+env_setup(path: "/abs/path/myapp")    // .env, services, DB (sqlite auto-created), APP_KEY
+setup(path: "/abs/path/myapp")        // framework Default:true steps — migrations, storage:link, etc.
+// Optional:
+site_tls(action: "enable", site: "myapp")   // HTTPS via mkcert
 ` + "```" + `
 
-**Set up a cloned project** (framework-agnostic):
+**Set up a cloned project, end-to-end** — framework-agnostic. **Run every step, in order.**
 ` + "```" + `
 site_link()                           // registers cwd as a lerd site
 composer(args: ["install"])           // BEFORE env_setup — APP_KEY generation needs vendor/
-env_setup()                           // fills .env, starts services, creates/touches DB, APP_KEY
-// Run migrations with the framework's tool:
-artisan(args: ["migrate", "--seed"])  // Laravel
-// console(args: ["doctrine:migrations:migrate"])  // Symfony
-// vendor_run(bin: "<migrator>", ...) // any other project that needs migrations
+env_setup()                           // .env, services, DB (sqlite auto-created), APP_KEY
+setup()                               // framework migrations + other Default:true setup steps
+// Optional:
+// vendor_run(bin: "pest")            // run tests to confirm everything works
 ` + "```" + `
 
 **Debugging a 500 on a lerd site** (ordered, stop at the first signal):
@@ -1192,9 +1192,9 @@ composer(args: ["install"])
 // If the error mentions APP_KEY:
 artisan(args: ["key:generate"])        // or framework's equivalent
 // If the error mentions the database file / connection:
-//   sqlite: env_setup() now auto-creates database/database.sqlite
+//   sqlite: env_setup() auto-creates database/database.sqlite
 //   mysql/postgres: service_control(action: "start", name: "<service>")
-artisan(args: ["migrate"])             // run pending migrations (or framework equivalent)
+setup()                                // re-runs pending migrations + setup steps
 status()                               // DNS / nginx / FPM container health at a glance
 doctor()                               // full diagnostic if nothing above explains it
 ` + "```" + `
