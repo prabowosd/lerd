@@ -77,6 +77,10 @@ func runInstall(_ *cobra.Command, _ []string) error {
 	}
 
 	// 2. Podman network
+	// Containers removed by the v4→v6 migration are restarted AFTER the
+	// quadlet refresh phase below — restarting inline here would bring them
+	// back on the stale pre-PairIPv6Binds quadlets.
+	var migrated []string
 	step("Creating lerd podman network")
 	if err := podman.EnsureNetwork("lerd"); err != nil {
 		if errors.Is(err, podman.ErrNetworkNeedsMigration) {
@@ -87,13 +91,7 @@ func runInstall(_ *cobra.Command, _ []string) error {
 			if mErr != nil {
 				return fmt.Errorf("migrating lerd network: %w", mErr)
 			}
-			// StartUnit recreates each container from its quadlet (systemd or launchd);
-			// `podman start` would reuse the stale pre-migration network spec.
-			for _, c := range restored {
-				if err := podman.StartUnit(c); err != nil {
-					fmt.Printf("    WARN: failed to restart %s: %v\n", c, err)
-				}
-			}
+			migrated = restored
 			step("Creating lerd podman network")
 		} else {
 			return err
@@ -335,6 +333,8 @@ func runInstall(_ *cobra.Command, _ []string) error {
 				}
 			}
 		}
+
+		refreshUnreferencedCustomQuadlets(seenSvc, reg)
 	}
 
 	// 7. Pull images before touching DNS so registry lookups use the system
@@ -398,15 +398,25 @@ func runInstall(_ *cobra.Command, _ []string) error {
 	}
 	ok()
 
+	// Start containers removed by the v4→v6 network migration. Runs after
+	// the quadlet refresh phase + DaemonReload so they come up on the
+	// freshly written dual-stack quadlets.
+	migratedSet := make(map[string]bool, len(migrated))
+	for _, c := range migrated {
+		migratedSet[c] = true
+		fmt.Printf("  --> Starting %s (network migration) ", c)
+		if err := podman.StartUnit(c); err != nil {
+			fmt.Printf("WARN: %v\n", err)
+		} else {
+			ok()
+		}
+	}
+
 	// Migration safety net: restart any container whose quadlet content
-	// actually changed during this install run, EXCEPT lerd-nginx and
-	// lerd-dns which are already restarted unconditionally below. The
-	// scenario this catches: a user updating from a release where every
-	// container was bound to 0.0.0.0 by default. Without this restart
-	// the running services would silently keep their old LAN-exposed
-	// bind even though the new quadlet on disk says 127.0.0.1.
+	// actually changed during this install run, EXCEPT lerd-nginx /
+	// lerd-dns (handled separately) and anything we just started above.
 	for _, name := range changedQuadlets {
-		if name == "lerd-nginx" || name == "lerd-dns" {
+		if name == "lerd-nginx" || name == "lerd-dns" || migratedSet[name] {
 			continue
 		}
 		if running, _ := podman.ContainerRunning(name); !running {
@@ -584,6 +594,32 @@ func runInstall(_ *cobra.Command, _ []string) error {
 	fmt.Println("\n  Dashboard: \033[96mhttp://lerd.localhost\033[0m")
 	fmt.Println("  Terminal:  \033[96mlerd tui\033[0m")
 	return nil
+}
+
+// refreshUnreferencedCustomQuadlets rewrites quadlets for globally installed
+// custom services and per-site custom containers that the per-site walk would
+// otherwise skip, so the v4→v6 migration reaches every managed container.
+func refreshUnreferencedCustomQuadlets(seenSvc map[string]bool, reg *config.SiteRegistry) {
+	if customs, err := config.ListCustomServices(); err == nil {
+		for _, svc := range customs {
+			if seenSvc[svc.Name] {
+				continue
+			}
+			seenSvc[svc.Name] = true
+			ensureCustomServiceQuadlet(svc) //nolint:errcheck
+		}
+	}
+	if reg == nil {
+		return
+	}
+	for _, s := range reg.Sites {
+		if s.Paused || s.Ignored || !s.IsCustomContainer() {
+			continue
+		}
+		if err := podman.WriteCustomContainerQuadlet(s.Name, s.Path, s.ContainerPort); err != nil {
+			fmt.Printf("  WARN: refreshing %s quadlet: %v\n", podman.CustomContainerName(s.Name), err)
+		}
+	}
 }
 
 // ensureSystemdLinger checks whether systemd user linger is enabled for the
