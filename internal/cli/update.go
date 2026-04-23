@@ -496,10 +496,10 @@ func runRollback() error {
 	// Update the cache.
 	lerdUpdate.WriteUpdateCache(prevVersion)
 
-	// Recreate the podman network so the old binary's `lerd install`
-	// starts with a clean v4-only network. Without this, a dual-stack
-	// network left by a newer version stays broken because the old
-	// binary doesn't know about IPv6.
+	// Recreate the network cleanly so the rolled-back binary's
+	// `lerd install` starts from a known-good state. The current
+	// binary's probe logic decides v4-only vs dual-stack; the old
+	// binary's EnsureNetwork will accept whatever schema it finds.
 	fmt.Println("  --> Resetting lerd network for rollback")
 	if attached, _, err := podman.RecreateNetwork("lerd"); err == nil {
 		for _, c := range attached {
