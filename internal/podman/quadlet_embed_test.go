@@ -270,6 +270,25 @@ func TestGenerateCustomQuadlet_DataDirDefaultsToZOnly(t *testing.T) {
 	}
 }
 
+func TestGenerateCustomQuadlet_EnvWithJSONPreservesQuotes(t *testing.T) {
+	svc := &config.CustomService{
+		Name:  "elasticvue",
+		Image: "docker.io/cars10/elasticvue:latest",
+		Environment: map[string]string{
+			"ELASTICVUE_CLUSTERS": `[{"name":"Lerd","uri":"http://localhost:9200"}]`,
+			"WILDCARD":            `"*"`,
+		},
+	}
+	out := GenerateCustomQuadlet(svc)
+	wantClusters := `Environment="ELASTICVUE_CLUSTERS=[{\"name\":\"Lerd\",\"uri\":\"http://localhost:9200\"}]"`
+	if !strings.Contains(out, wantClusters) {
+		t.Errorf("env value with JSON quotes must be wrapped + escaped (otherwise systemd strips inner quotes), got:\n%s", out)
+	}
+	if !strings.Contains(out, `Environment="WILDCARD=\"*\""`) {
+		t.Errorf("env value with quoted wildcard must round-trip, got:\n%s", out)
+	}
+}
+
 func TestGenerateCustomQuadlet_StopTimeout(t *testing.T) {
 	// Images like selenium/standalone-chromium hang for 30s+ on graceful
 	// shutdown. StopTimeout=5 bounds podman's SIGTERM-wait so systemctl stop

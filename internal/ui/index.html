@@ -2146,7 +2146,7 @@ function lerdApp() {
     linkModal: { open: false, currentDir: '', dirs: [], loading: false, linking: false, error: '', logs: [] },
     presets: [],
     presetModal: { open: false, loading: false },
-    presetSuggestions: { mysql: 'phpmyadmin', postgres: 'pgadmin', mongo: 'mongo-express' },
+    presetSuggestions: { mysql: 'phpmyadmin', postgres: 'pgadmin', mongo: 'mongo-express', elasticsearch: 'elasticvue' },
     dismissedPresetSuggestions: JSON.parse(localStorage.getItem('lerd-dismissed-preset-suggestions') || '[]'),
     phpVersions: [],
     nodeVersions: [],
@@ -2404,6 +2404,10 @@ function lerdApp() {
       mongo: 'MongoDB',
       'mongo-express': 'Mongo Express',
       'stripe-mock': 'Stripe Mock',
+      elasticsearch: 'Elasticsearch',
+      elasticvue: 'Elasticvue',
+      memcached: 'Memcached',
+      rabbitmq: 'RabbitMQ',
     },
     serviceLabel(svc) {
       if (!svc || !svc.name) return '';
@@ -3348,6 +3352,7 @@ function lerdApp() {
         mailhog: icons.mail,
         meilisearch: icons.search,
         elasticsearch: icons.search,
+        elasticvue: icons.search,
         typesense: icons.search,
         rustfs: icons.storage,
         minio: icons.storage,

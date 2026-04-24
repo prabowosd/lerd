@@ -21,6 +21,7 @@ func TestListPresets_IncludesShippedPresets(t *testing.T) {
 		"memcached":     false,
 		"rabbitmq":      false,
 		"elasticsearch": false,
+		"elasticvue":    false,
 	}
 	for _, p := range presets {
 		if _, ok := want[p.Name]; ok {
@@ -118,6 +119,38 @@ func TestLoadPreset_RabbitMQ(t *testing.T) {
 	}
 	if p.DataDir == "" {
 		t.Errorf("rabbitmq should persist /var/lib/rabbitmq for queue durability across restarts")
+	}
+}
+
+func TestLoadPreset_Elasticvue(t *testing.T) {
+	p, err := LoadPreset("elasticvue")
+	if err != nil {
+		t.Fatalf("LoadPreset(elasticvue) error = %v", err)
+	}
+	if len(p.DependsOn) != 1 || p.DependsOn[0] != "elasticsearch" {
+		t.Errorf("elasticvue should depend on elasticsearch, got %v", p.DependsOn)
+	}
+	if p.Dashboard == "" {
+		t.Errorf("elasticvue must expose its UI as dashboard")
+	}
+	if got := p.Environment["ELASTICVUE_CLUSTERS"]; got == "" {
+		t.Errorf("elasticvue must pre-configure the lerd ES cluster via ELASTICVUE_CLUSTERS")
+	}
+}
+
+func TestLoadPreset_ElasticsearchEnablesCors(t *testing.T) {
+	p, err := LoadPreset("elasticsearch")
+	if err != nil {
+		t.Fatalf("LoadPreset(elasticsearch) error = %v", err)
+	}
+	if p.Environment["http.cors.enabled"] != "true" {
+		t.Errorf("elasticsearch must enable CORS so the elasticvue browser SPA can reach it, got %q", p.Environment["http.cors.enabled"])
+	}
+	// The wildcard must be wrapped in literal quotes because ES parses env
+	// vars as YAML and a bare '*' becomes an alias token that crashes the
+	// SnakeYAML scanner on boot.
+	if p.Environment["http.cors.allow-origin"] != `"*"` {
+		t.Errorf(`elasticsearch must allow any origin for local dev (quoted to survive YAML parse), got %q`, p.Environment["http.cors.allow-origin"])
 	}
 }
 
