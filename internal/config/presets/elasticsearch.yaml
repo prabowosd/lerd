@@ -1,0 +1,17 @@
+name: elasticsearch
+image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
+description: Elasticsearch single-node search and analytics engine
+ports:
+  - "9200:9200"
+environment:
+  discovery.type: single-node
+  xpack.security.enabled: "false"
+  ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+data_dir: /usr/share/elasticsearch/data
+env_vars:
+  - ELASTICSEARCH_HOST=lerd-elasticsearch
+  - ELASTICSEARCH_PORT=9200
+  - ELASTICSEARCH_URL=http://lerd-elasticsearch:9200
+env_detect:
+  composer: elasticsearch/elasticsearch
+connection_url: http://127.0.0.1:9200
