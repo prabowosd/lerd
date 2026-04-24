@@ -28,6 +28,7 @@
       padding: 28px 28px 24px;
       box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
     }
+    .logo { width: 56px; height: 56px; margin: 0 0 16px; display: block; }
     .title {
       display: flex;
       align-items: center;
@@ -56,7 +57,24 @@
       color: #d1d5db;
       white-space: pre-wrap;
       word-break: break-word;
+      margin: 0;
+      flex: 1;
     }
+    .cmd-row { display: flex; gap: 6px; align-items: stretch; }
+    .copy-btn {
+      background: #0d0d0d;
+      border: 1px solid #2a2a2a;
+      color: #9ca3af;
+      border-radius: 6px;
+      padding: 0 10px;
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: color 0.15s, background 0.15s;
+    }
+    .copy-btn:hover { color: #e5e7eb; background: #141414; }
+    .copy-btn.copied { color: #10b981; border-color: rgba(16, 185, 129, 0.4); }
     .row { display: flex; gap: 10px; margin-top: 20px; align-items: center; }
     button {
       appearance: none;
@@ -76,14 +94,18 @@
 </head>
 <body>
   <div class="card">
-    <p class="title"><span class="dot" id="dot"></span> lerd-ui is not reachable</p>
-    <p class="subtitle">This page is being served by the installed app's offline cache. Your services are unaffected — only the dashboard backend is stopped or restarting.</p>
+    <img class="logo" src="/icons/icon.svg" alt="Lerd">
+    <p class="title"><span class="dot" id="dot"></span> Lerd is not running</p>
+    <p class="subtitle">This page is being served by the installed app's offline cache. Your containers and site files are untouched; only the lerd stack is stopped or restarting.</p>
 
     <h2>Start it</h2>
-    <pre id="cmd">systemctl --user start lerd-ui</pre>
+    <div class="cmd-row">
+      <pre id="cmd">lerd start</pre>
+      <button class="copy-btn" id="copy" type="button">Copy</button>
+    </div>
 
     <h2>Or use the tray</h2>
-    <p class="subtitle" style="margin-top: 0">Click the lerd tray icon and choose <strong>Start Lerd UI</strong>. On macOS, look in the menu bar.</p>
+    <p class="subtitle" style="margin-top: 0">Click the lerd tray icon and choose <strong>Start Lerd</strong>. On macOS, look in the menu bar.</p>
 
     <div class="row">
       <button id="retry">Retry now</button>
@@ -92,15 +114,31 @@
   </div>
   <script>
     (function () {
-      var cmd = document.getElementById('cmd');
-      var platform = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
-      if (/mac/i.test(platform)) {
-        cmd.textContent = 'launchctl kickstart -k gui/$(id -u)/com.lerd.lerd-ui';
-      }
-
       var statusEl = document.getElementById('status');
       var dotEl = document.getElementById('dot');
       var retryBtn = document.getElementById('retry');
+      var copyBtn = document.getElementById('copy');
+      var cmdEl = document.getElementById('cmd');
+
+      copyBtn.addEventListener('click', async function () {
+        try {
+          await navigator.clipboard.writeText(cmdEl.textContent.trim());
+        } catch (_) {
+          var r = document.createRange();
+          r.selectNodeContents(cmdEl);
+          var s = window.getSelection();
+          s.removeAllRanges();
+          s.addRange(r);
+          try { document.execCommand('copy'); } catch (_) {}
+          s.removeAllRanges();
+        }
+        copyBtn.textContent = 'Copied';
+        copyBtn.classList.add('copied');
+        setTimeout(function () {
+          copyBtn.textContent = 'Copy';
+          copyBtn.classList.remove('copied');
+        }, 1500);
+      });
 
       async function probe() {
         try {
