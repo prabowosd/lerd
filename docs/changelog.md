@@ -13,6 +13,10 @@ Lerd uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Dashboard rewritten in Svelte + TypeScript**. The web UI has been rebuilt from scratch in Svelte 5 with Vite, TypeScript, and Tailwind as a PostCSS plugin. The previous 4,800-line Alpine.js monolith (`internal/ui/index.html`) has been removed. The new build lives under `internal/ui/web/` as small composable components per tab, stores, and modals. Every feature from the Alpine version is preserved: Sites/Services/System tabs, per-site controls, worktree list, domain-management modal, link-site modal, preset install modal with NDJSON phase progress, LAN exposure flow with progress modal and remote-setup code generator, remote dashboard access flow, service dashboard iframe overlay, mobile bottom nav with a dedicated Apps page for dashboard services, offline PWA. Bundle ships as a single hashed JS + CSS file embedded into the Go binary (≈60 KB gzipped JS, 7 KB gzipped CSS). Vite build runs before `go build` via `make build-ui`; `make test-all` runs the new Vitest suite alongside the existing Go tests and bats installer tests. No backend or API changes were made; the WebSocket snapshot protocol and all `/api/*` routes are identical. The service worker's version stamp is still baked from the build metadata so cache invalidation happens on every update.
+
 ---
 
 ## [1.18.0] — 2026-04-25
