@@ -6,11 +6,34 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/geodro/lerd/internal/config"
 	"github.com/geodro/lerd/internal/systemd"
 )
+
+// quadletReloadPending records that a previous DaemonReloadIfNeeded call
+// failed without being retried. The next caller forces a reload even when
+// nothing else changed so a transient DBus failure does not leave
+// systemd's cache stale until an external trigger heals it.
+var quadletReloadPending atomic.Bool
+
+// DaemonReloadIfNeeded reloads systemd when the caller wrote new quadlet
+// content (changed=true) or when a previous reload failed and was never
+// retried. Failures set a sticky flag so the next caller forces the
+// retry; success clears it.
+func DaemonReloadIfNeeded(changed bool) error {
+	if !changed && !quadletReloadPending.Load() {
+		return nil
+	}
+	if err := DaemonReloadFn(); err != nil {
+		quadletReloadPending.Store(true)
+		return err
+	}
+	quadletReloadPending.Store(false)
+	return nil
+}
 
 // WriteQuadlet writes a Podman quadlet container unit file. Before writing
 // it applies BindForLAN to rewrite PublishPort= lines according to the
