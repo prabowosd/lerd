@@ -87,6 +87,11 @@ func workersModeFromArgs(args []string) (mode string, show bool, err error) {
 		args[0], config.WorkerExecModeExec, config.WorkerExecModeContainer)
 }
 
+// ApplyWorkersMode is the exported wrapper around applyWorkersMode used
+// by the dashboard handler so the web toggle drives the same migration
+// path as the CLI.
+func ApplyWorkersMode(newMode string) error { return applyWorkersMode(newMode) }
+
 // applyWorkersMode writes newMode to global config, then (on macOS, if
 // the mode actually changed) stops every active worker in its old shape,
 // removes stale on-disk artifacts, and restarts each in the new shape.

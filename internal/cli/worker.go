@@ -274,7 +274,12 @@ func WorkerStartForSite(siteName, sitePath, phpVersion, workerName string, w con
 		}
 	}
 
-	if err := services.Mgr.Start(lifecycleTarget); err != nil {
+	// Route through podman.StartUnit (not services.Mgr.Start directly) so
+	// AfterUnitChange fires the dashboard cache invalidate + WS push. On
+	// Linux the systemd DBus subscription catches direct services.Mgr
+	// calls as a fallback; macOS has no equivalent, so a direct call
+	// leaves the UI stale until the next 15s cache poll.
+	if err := podman.StartUnit(lifecycleTarget); err != nil {
 		return fmt.Errorf("starting %s worker: %w", workerName, err)
 	}
 

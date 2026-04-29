@@ -44,18 +44,20 @@ func TestBuildDarwinExecWorkerService_UnquotedPath(t *testing.T) {
 
 func TestBuildDarwinExecWorkerGuardScript_WrapsPodmanExec(t *testing.T) {
 	pidFile := "/run/workers/lerd-queue-alpha.pid"
-	command := "podman exec -w /Users/u/alpha lerd-php84-fpm php artisan queue:work"
+	podmanBin := "/opt/homebrew/bin/podman"
+	container := "lerd-php84-fpm"
+	workerCmd := "php artisan queue:work"
+	runCmd := "/opt/homebrew/bin/podman exec -w /Users/u/alpha lerd-php84-fpm php artisan queue:work"
 
-	script := buildDarwinExecWorkerGuardScript(pidFile, command)
+	script := buildDarwinExecWorkerGuardScript(pidFile, podmanBin, container, workerCmd, runCmd)
 
 	if !strings.HasPrefix(script, "#!/bin/sh") {
 		t.Errorf("guard script should start with shebang, got:\n%s", script)
 	}
-	if !strings.Contains(script, pidFile) {
-		t.Errorf("guard script should mention pid file %q", pidFile)
-	}
-	if !strings.Contains(script, command) {
-		t.Errorf("guard script should wrap command %q", command)
+	for _, want := range []string{pidFile, runCmd, container, "pkill -f", "'php artisan queue:work'"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("guard script missing %q:\n%s", want, script)
+		}
 	}
 }
 

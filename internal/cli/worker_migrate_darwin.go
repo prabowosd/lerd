@@ -5,6 +5,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -61,7 +62,53 @@ func migrateWorkersOnModeChange(fromMode, toMode string) error {
 			fmt.Printf("[WARN] restart %s in %s mode: %v\n", step.Unit, step.To, err)
 		}
 	}
+
+	// Defensive sweep when landing in exec mode: discovery only sees
+	// workers with a live plist, so a container left behind by a previous
+	// mode flip on an older build (or by a worker that exited before we
+	// looked) survives the per-step rm. exec mode never owns per-worker
+	// containers, so any lerd-{queue,schedule,horizon,reverb,custom}-*
+	// container is by definition stale and safe to drop.
+	if toMode == config.WorkerExecModeExec {
+		sweepOrphanWorkerContainers()
+	}
 	return nil
+}
+
+// sweepOrphanWorkerContainers removes any container whose name matches a
+// known worker prefix. Only safe to call when the target mode is exec.
+func sweepOrphanWorkerContainers() {
+	prefixes := workerContainerPrefixes()
+	if len(prefixes) == 0 {
+		return
+	}
+	out, err := exec.Command(podman.PodmanBin(), "ps", "-a", "--format", "{{.Names}}").Output()
+	if err != nil {
+		return
+	}
+	for _, name := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		for _, pfx := range prefixes {
+			if strings.HasPrefix(name, pfx) {
+				podman.RemoveContainer(name)
+				break
+			}
+		}
+	}
+}
+
+// workerContainerPrefixes turns the unit globs ("lerd-queue-*") into
+// container-name prefixes ("lerd-queue-") for substring matching.
+func workerContainerPrefixes() []string {
+	globs := workerUnitGlobs()
+	prefixes := make([]string, 0, len(globs))
+	for _, g := range globs {
+		prefixes = append(prefixes, strings.TrimSuffix(g, "*"))
+	}
+	return prefixes
 }
 
 // discoverActiveWorkerUnits returns the unit names of every lerd framework

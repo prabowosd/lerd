@@ -8,13 +8,32 @@ import (
 	"testing"
 )
 
+// guardArgs is a fixture covering the new buildWorkerGuard signature.
+// `true` is used as the podman binary so the orphan-cleanup step always
+// succeeds quickly without contacting a real podman machine.
+type guardArgs struct {
+	pidFile, podmanBin, container, workerCmd, runCmd string
+}
+
+func defaultGuardArgs(pidFile, runCmd string) guardArgs {
+	return guardArgs{
+		pidFile:   pidFile,
+		podmanBin: "true",
+		container: "lerd-php84-fpm",
+		workerCmd: "php artisan queue:work",
+		runCmd:    runCmd,
+	}
+}
+
+func (a guardArgs) build() string {
+	return buildWorkerGuard(a.pidFile, a.podmanBin, a.container, a.workerCmd, a.runCmd)
+}
+
 func TestBuildWorkerGuard_WrapsCommand(t *testing.T) {
-	pidFile := "/tmp/lerd-queue-alpha.pid"
-	cmd := "podman exec -w /site lerd-php84-fpm php artisan queue:work"
+	a := defaultGuardArgs("/tmp/lerd-queue-alpha.pid", "podman exec -w /site lerd-php84-fpm php artisan queue:work")
+	got := a.build()
 
-	got := buildWorkerGuard(pidFile, cmd)
-
-	for _, want := range []string{pidFile, cmd, "kill -0", "exec "} {
+	for _, want := range []string{a.pidFile, a.runCmd, "kill -0", "exec ", "pkill -f", "'php artisan queue:work'"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("guard missing %q:\n%s", want, got)
 		}
@@ -22,20 +41,14 @@ func TestBuildWorkerGuard_WrapsCommand(t *testing.T) {
 }
 
 func TestBuildWorkerGuard_ExitsZeroWhenPIDAlive(t *testing.T) {
-	// End-to-end: run the guard script with a PID file pointing at this test
-	// process (guaranteed alive) and verify the script exits 0 without
-	// invoking the wrapped command. We use `false` as the wrapped command so
-	// that if the guard fails, the outer script exits non-zero.
 	tmp := t.TempDir()
 	pidFile := filepath.Join(tmp, "worker.pid")
-	// Write our own PID into the file — guaranteed alive for the duration
-	// of the test.
 	if err := os.WriteFile(pidFile, []byte(testPIDString()), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	script := buildWorkerGuard(pidFile, "false")
-	cmd := exec.Command("sh", "-c", script)
+	a := defaultGuardArgs(pidFile, "false")
+	cmd := exec.Command("sh", "-c", a.build())
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("guard should exit 0 when pid is alive, got: %v", err)
 	}
@@ -44,17 +57,13 @@ func TestBuildWorkerGuard_ExitsZeroWhenPIDAlive(t *testing.T) {
 func TestBuildWorkerGuard_ProceedsWhenPIDStale(t *testing.T) {
 	tmp := t.TempDir()
 	pidFile := filepath.Join(tmp, "worker.pid")
-	// PID 1 is init; we'd never race with it, but the standard stale-PID
-	// test is to use an unlikely-to-exist high PID.
 	if err := os.WriteFile(pidFile, []byte("2147483646\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	// Wrapped command that touches a marker file so we can verify the
-	// guard actually invoked it.
 	marker := filepath.Join(tmp, "ran")
-	script := buildWorkerGuard(pidFile, "touch "+marker)
-	cmd := exec.Command("sh", "-c", script)
+	a := defaultGuardArgs(pidFile, "touch "+marker)
+	cmd := exec.Command("sh", "-c", a.build())
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("guard with stale pid should run wrapped command: %v", err)
 	}
@@ -67,8 +76,8 @@ func TestBuildWorkerGuard_ProceedsWhenPIDFileMissing(t *testing.T) {
 	tmp := t.TempDir()
 	pidFile := filepath.Join(tmp, "worker.pid")
 	marker := filepath.Join(tmp, "ran")
-	script := buildWorkerGuard(pidFile, "touch "+marker)
-	cmd := exec.Command("sh", "-c", script)
+	a := defaultGuardArgs(pidFile, "touch "+marker)
+	cmd := exec.Command("sh", "-c", a.build())
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("guard without pid file should run wrapped command: %v", err)
 	}
@@ -80,11 +89,101 @@ func TestBuildWorkerGuard_ProceedsWhenPIDFileMissing(t *testing.T) {
 func TestBuildWorkerGuard_WritesPIDFileBeforeExec(t *testing.T) {
 	tmp := t.TempDir()
 	pidFile := filepath.Join(tmp, "worker.pid")
-	// Wrap with a command that reads the pid file and confirms it has content.
-	script := buildWorkerGuard(pidFile, "test -s "+pidFile)
-	cmd := exec.Command("sh", "-c", script)
+	a := defaultGuardArgs(pidFile, "test -s "+pidFile)
+	cmd := exec.Command("sh", "-c", a.build())
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("pid file should be written before wrapped command runs: %v", err)
+	}
+}
+
+// TestBuildWorkerGuard_RunsOrphanCleanupBeforeExec verifies the orphan
+// pkill step (step 2) runs even when the pid file is missing — this is
+// the suspend/wake codepath. We swap `podman` for a stub that touches a
+// marker file so the test asserts the call happened without needing a
+// real container.
+func TestBuildWorkerGuard_RunsOrphanCleanupBeforeExec(t *testing.T) {
+	tmp := t.TempDir()
+	pidFile := filepath.Join(tmp, "worker.pid")
+	pkillMarker := filepath.Join(tmp, "pkill-ran")
+
+	// Stub records each arg between angle brackets so the test can assert
+	// the worker command was passed as a single shell argument (i.e. the
+	// quoting in buildWorkerGuard worked) rather than being word-split.
+	stub := filepath.Join(tmp, "podman-stub")
+	stubScript := "#!/bin/sh\nfor a in \"$@\"; do printf '<%s>' \"$a\" >> " + pkillMarker + "; done\nexit 0\n"
+	if err := os.WriteFile(stub, []byte(stubScript), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	a := guardArgs{
+		pidFile:   pidFile,
+		podmanBin: stub,
+		container: "lerd-php84-fpm",
+		workerCmd: "php artisan queue:work --queue=default",
+		runCmd:    "true",
+	}
+	cmd := exec.Command("sh", "-c", a.build())
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("guard run failed: %v", err)
+	}
+
+	got, err := os.ReadFile(pkillMarker)
+	if err != nil {
+		t.Fatalf("orphan cleanup did not invoke podman: %v", err)
+	}
+	want := "<exec><lerd-php84-fpm><pkill><-f><--><php artisan queue:work --queue=default>"
+	if string(got) != want {
+		t.Errorf("orphan cleanup args mismatch.\ngot:  %s\nwant: %s", got, want)
+	}
+}
+
+// TestBuildWorkerGuard_SkipsOrphanCleanupWhenOuterAlive ensures the live
+// host-side process short-circuit happens before any podman call —
+// otherwise we'd wake the podman machine for every launchd respawn.
+func TestBuildWorkerGuard_SkipsOrphanCleanupWhenOuterAlive(t *testing.T) {
+	tmp := t.TempDir()
+	pidFile := filepath.Join(tmp, "worker.pid")
+	pkillMarker := filepath.Join(tmp, "pkill-ran")
+
+	if err := os.WriteFile(pidFile, []byte(testPIDString()), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	stub := filepath.Join(tmp, "podman-stub")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\ntouch "+pkillMarker+"\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	a := guardArgs{
+		pidFile:   pidFile,
+		podmanBin: stub,
+		container: "lerd-php84-fpm",
+		workerCmd: "php artisan queue:work",
+		runCmd:    "false",
+	}
+	if err := exec.Command("sh", "-c", a.build()).Run(); err != nil {
+		t.Fatalf("guard should exit 0: %v", err)
+	}
+	if _, err := os.Stat(pkillMarker); err == nil {
+		t.Error("podman was invoked even though outer process is alive")
+	}
+}
+
+// TestShellQuote covers the single-quote escaping used to interpolate
+// workerCmd into the pkill argument.
+func TestShellQuote(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"php artisan queue:work", "'php artisan queue:work'"},
+		{"a b", "'a b'"},
+		{"it's", `'it'\''s'`},
+		{"", "''"},
+	}
+	for _, c := range cases {
+		if got := shellQuote(c.in); got != c.want {
+			t.Errorf("shellQuote(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }
 

@@ -2408,13 +2408,7 @@ func handleSettingsWorkerMode(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"ok": false, "error": "unknown mode"})
 		return
 	}
-	cfg, err := config.LoadGlobal()
-	if err != nil {
-		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
-		return
-	}
-	cfg.Workers.ExecMode = body.Mode
-	if err := config.SaveGlobal(cfg); err != nil {
+	if err := cli.ApplyWorkersMode(body.Mode); err != nil {
 		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
