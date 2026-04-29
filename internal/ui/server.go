@@ -41,9 +41,6 @@ import (
 	"github.com/geodro/lerd/internal/xdebugops"
 )
 
-//go:embed index.html
-var indexHTML []byte
-
 //go:embed icons/icon.svg
 var iconSVG []byte
 
@@ -85,57 +82,6 @@ const listenAddr = "0.0.0.0:7073"
 // processes with filesystem access to the socket can connect.
 type ctxKeyUnixSocket struct{}
 
-var knownServices = siteinfo.KnownServices
-
-var serviceEnvVars = map[string][]string{
-	"mysql": {
-		"DB_CONNECTION=mysql",
-		"DB_HOST=lerd-mysql",
-		"DB_PORT=3306",
-		"DB_DATABASE=lerd",
-		"DB_USERNAME=root",
-		"DB_PASSWORD=lerd",
-	},
-	"postgres": {
-		"DB_CONNECTION=pgsql",
-		"DB_HOST=lerd-postgres",
-		"DB_PORT=5432",
-		"DB_DATABASE=lerd",
-		"DB_USERNAME=postgres",
-		"DB_PASSWORD=lerd",
-	},
-	"redis": {
-		"REDIS_HOST=lerd-redis",
-		"REDIS_PORT=6379",
-		"REDIS_PASSWORD=null",
-		"CACHE_STORE=redis",
-		"SESSION_DRIVER=redis",
-		"QUEUE_CONNECTION=redis",
-	},
-	"meilisearch": {
-		"SCOUT_DRIVER=meilisearch",
-		"MEILISEARCH_HOST=http://lerd-meilisearch:7700",
-	},
-	"rustfs": {
-		"FILESYSTEM_DISK=s3",
-		"AWS_ACCESS_KEY_ID=lerd",
-		"AWS_SECRET_ACCESS_KEY=lerdpassword",
-		"AWS_DEFAULT_REGION=us-east-1",
-		"AWS_BUCKET=lerd",
-		"AWS_URL=http://localhost:9000",
-		"AWS_ENDPOINT=http://lerd-rustfs:9000",
-		"AWS_USE_PATH_STYLE_ENDPOINT=true",
-	},
-	"mailpit": {
-		"MAIL_MAILER=smtp",
-		"MAIL_HOST=lerd-mailpit",
-		"MAIL_PORT=1025",
-		"MAIL_USERNAME=null",
-		"MAIL_PASSWORD=null",
-		"MAIL_ENCRYPTION=null",
-	},
-}
-
 // Start starts the HTTP server on listenAddr.
 func Start(currentVersion string) error {
 	// Every unit lifecycle change (from CLI, MCP, HTTP handlers, or the
@@ -154,21 +100,44 @@ func Start(currentVersion string) error {
 	// Restart any LAN share proxies that were active before this process started.
 	go cli.RestoreLANShareProxies()
 
-	podman.AfterUnitChange = func(name string) {
-		// Run the poll and snapshot publish in a goroutine so the HTTP
-		// handler (and the unit start/stop call that triggered this) returns
-		// immediately. PollNow blocks until podman ps completes, ensuring
-		// the snapshot broadcast carries current container states rather than
-		// a stale pre-mutation value — which would cause the UI toggle to
-		// appear to revert.
-		go func() {
+	// Single coalescer for the three event sources that need to refresh the
+	// container cache and broadcast a snapshot: in-process mutations
+	// (AfterUnitChange), DBus push notifications (SubscribeLerdUnitStateChanges),
+	// and CLI/MCP notifications (/api/internal/notify). A burst of state
+	// transitions (e.g. a unit cycling activating→active during start) used to
+	// spawn one podman ps subprocess per transition; the coalescer collapses
+	// them into one poll + one publish per ~250ms quiet period.
+	//
+	// When no UI tab is open we don't fork podman ps — runSnapshotInvalidator
+	// also skips the rebuild for the same reason, and the periodic cache poll
+	// (60s while idle) catches container state on its own. An incoming WS
+	// connection forces a fresh PollNow before sending the initial snapshot.
+	publisher := newPollPublisher(250*time.Millisecond, func() {
+		if visibleClients.Load() > 0 {
 			podman.Cache.PollNow()
-			siteinfo.InvalidateUnitCache()
-			eventbus.Default.Publish(eventbus.KindSites)
-			eventbus.Default.Publish(eventbus.KindServices)
-			eventbus.Default.Publish(eventbus.KindStatus)
-		}()
-	}
+		}
+		siteinfo.InvalidateUnitCache()
+		eventbus.Default.Publish(eventbus.KindSites)
+		eventbus.Default.Publish(eventbus.KindServices)
+		eventbus.Default.Publish(eventbus.KindStatus)
+	})
+
+	podman.AfterUnitChange = func(string) { publisher.trigger() }
+
+	// External state changes (container crash, systemctl outside lerd-ui,
+	// timer firings) are caught by the periodic podman cache poll instead
+	// of a DBus PropertiesChanged subscription. The subscription used to
+	// burn ~50% of one core because go-systemd's dispatch goroutine fetches
+	// unit properties on every signal, and active containers emit a steady
+	// stream of property updates (CPU accounting, exec status, restart
+	// counters). Polling at 15s when a UI tab is focused / 60s otherwise
+	// trades off-up-to-15s latency for an order-of-magnitude CPU saving.
+	podman.Cache.SetOnChange(publisher.trigger)
+
+	// Drop the cache to idle cadence whenever the desktop session is idle
+	// or locked, so a focused tab on an unattended laptop still saves
+	// battery. Recomputes on every transition.
+	startIdleWatcher(context.Background())
 
 	// A single goroutine subscribes to the eventbus and invalidates the
 	// relevant snapshot on every mutation. The /api/ws handler broadcasts
@@ -191,13 +160,7 @@ func Start(currentVersion string) error {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
-		go func() {
-			podman.Cache.PollNow()
-			siteinfo.InvalidateUnitCache()
-			eventbus.Default.Publish(eventbus.KindSites)
-			eventbus.Default.Publish(eventbus.KindServices)
-			eventbus.Default.Publish(eventbus.KindStatus)
-		}()
+		publisher.trigger()
 		w.WriteHeader(http.StatusNoContent)
 	})
 
@@ -278,15 +241,7 @@ func Start(currentVersion string) error {
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Write(offlineHTML) //nolint:errcheck
 	})
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		// The shell embeds the entire JS/CSS inline and changes on
-		// every binary update. Without this, browsers cache the HTML
-		// indefinitely and keep running stale client code — which hid
-		// the WebSocket URL-rewrite fix during local testing.
-		w.Header().Set("Cache-Control", "no-store")
-		w.Write(indexHTML) //nolint:errcheck
-	})
+	mux.Handle("/", serveSvelte())
 
 	handler := withRemoteControlGate(mux)
 
@@ -325,8 +280,15 @@ func Start(currentVersion string) error {
 		}
 	}
 
+	ln, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", listenAddr, err)
+	}
 	fmt.Printf("Lerd UI listening on http://%s\n", listenAddr)
-	return http.ListenAndServe(listenAddr, handler)
+	// Notify systemd we're ready only after the listener is accepting, so
+	// Type=notify units make systemctl start block until the UI can serve.
+	lerdSystemd.NotifyReady()
+	return http.Serve(ln, handler)
 }
 
 var allowedCORSOrigins = map[string]bool{
@@ -785,21 +747,16 @@ type ServiceResponse struct {
 	HorizonSite        string            `json:"horizon_site,omitempty"`
 	WorkerSite         string            `json:"worker_site,omitempty"`
 	WorkerName         string            `json:"worker_name,omitempty"`
-}
-
-// builtinDashboards maps built-in service names to their dashboard URLs.
-var builtinDashboards = map[string]string{
-	"mailpit":     "http://localhost:8025",
-	"rustfs":      "http://localhost:9001/rustfs/console/",
-	"meilisearch": "http://localhost:7700",
-}
-
-// builtinConnectionURLs maps built-in service names to clickable connection URLs
-// using localhost (for use with DB clients and tools on the host machine).
-var builtinConnectionURLs = map[string]string{
-	"mysql":    "mysql://root:lerd@127.0.0.1:3306/lerd",
-	"postgres": "postgresql://postgres:lerd@127.0.0.1:5432/lerd",
-	"redis":    "redis://127.0.0.1:6379",
+	UpdateStrategy     string            `json:"update_strategy,omitempty"`
+	UpdateAvailable    bool              `json:"update_available,omitempty"`
+	LatestVersion      string            `json:"latest_version,omitempty"`
+	UpgradeVersion     string            `json:"upgrade_version,omitempty"`
+	PreviousVersion    string            `json:"previous_version,omitempty"`
+	// MigrationSupported and CanRollback intentionally drop omitempty so the
+	// false case still appears in the JSON. The UI uses === to distinguish
+	// "field missing" (no avail check ran) from "explicitly false".
+	MigrationSupported bool `json:"migration_supported"`
+	CanRollback        bool `json:"can_rollback"`
 }
 
 func buildServiceResponse(name string) ServiceResponse {
@@ -810,25 +767,39 @@ func buildServiceResponse(name string) ServiceResponse {
 	}
 
 	envMap := map[string]string{}
-	for _, kv := range serviceEnvVars[name] {
+	for _, kv := range config.DefaultPresetEnvVars(name) {
 		parts := strings.SplitN(kv, "=", 2)
 		if len(parts) == 2 {
 			envMap[parts[0]] = parts[1]
 		}
 	}
 
-	return ServiceResponse{
+	resp := ServiceResponse{
 		Name:          name,
 		Status:        status,
 		Version:       podman.ServiceVersionLabel(podman.InstalledImage(unit)),
 		EnvVars:       envMap,
-		Dashboard:     builtinDashboards[name],
-		ConnectionURL: builtinConnectionURLs[name],
+		Dashboard:     config.DefaultPresetDashboard(name),
+		ConnectionURL: config.DefaultPresetConnectionURL(name),
 		SiteCount:     countSitesUsingService(name),
 		SiteDomains:   sitesUsingService(name),
 		Pinned:        config.ServiceIsPinned(name),
 		Paused:        config.ServiceIsPaused(name),
 	}
+	// Default-preset services advertise update availability so the dashboard
+	// can show an "→ v8.4.3" badge. Stopped services also run the check so the
+	// user can pull a newer image without first starting the unit; the registry
+	// layer's 6h disk cache absorbs repeated lookups.
+	if avail, err := serviceops.CheckUpdateAvailable(name); err == nil && avail != nil {
+		resp.UpdateStrategy = avail.Strategy
+		resp.UpdateAvailable = avail.Available
+		resp.LatestVersion = avail.LatestTag
+		resp.UpgradeVersion = avail.UpgradeTag
+		resp.PreviousVersion = avail.PreviousImage
+		resp.MigrationSupported = serviceops.SupportsMigration(name)
+		resp.CanRollback = avail.CanRollback
+	}
+	return resp
 }
 
 // listActiveQueueWorkers returns the site names of active lerd-queue-* systemd units.
@@ -870,8 +841,9 @@ func handleServices(w http.ResponseWriter, _ *http.Request) {
 func buildServicesJSON() []byte { return []byte(mustJSON(buildServicesList())) }
 
 func buildServicesList() []ServiceResponse {
-	services := make([]ServiceResponse, 0, len(knownServices))
-	for _, name := range knownServices {
+	defaultNames := siteinfo.KnownServices()
+	services := make([]ServiceResponse, 0, len(defaultNames))
+	for _, name := range defaultNames {
 		services = append(services, buildServiceResponse(name))
 	}
 	customs, _ := config.ListCustomServices()
@@ -1073,17 +1045,7 @@ func handleServicePresetInstall(w http.ResponseWriter, r *http.Request) {
 	}
 	version := r.URL.Query().Get("version")
 
-	w.Header().Set("Content-Type", "application/x-ndjson")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusOK)
-	flusher, _ := w.(http.Flusher)
-	writeLine := func(payload any) {
-		data, _ := json.Marshal(payload)
-		_, _ = w.Write(append(data, '\n'))
-		if flusher != nil {
-			flusher.Flush()
-		}
-	}
+	writeLine, _ := startNDJSONStream(w, r)
 
 	svc, err := serviceops.InstallPresetStreaming(name, version, func(ev serviceops.PhaseEvent) {
 		writeLine(ev)
@@ -1099,6 +1061,42 @@ func handleServicePresetInstall(w http.ResponseWriter, r *http.Request) {
 		"dashboard":  svc.Dashboard,
 		"depends_on": svc.DependsOn,
 	})
+}
+
+// startNDJSONStream writes the streaming-response headers and returns a
+// writeLine that stops after the first failed write or when the client
+// disconnects, so a refreshed browser tab can't drive the server to keep
+// writing into a broken connection.
+func startNDJSONStream(w http.ResponseWriter, r *http.Request) (writeLine func(payload any), alive func() bool) {
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
+	dead := false
+	ctx := r.Context()
+	writeLine = func(payload any) {
+		if dead {
+			return
+		}
+		if ctx.Err() != nil {
+			dead = true
+			return
+		}
+		data, err := json.Marshal(payload)
+		if err != nil {
+			dead = true
+			return
+		}
+		if _, err := w.Write(append(data, '\n')); err != nil {
+			dead = true
+			return
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	alive = func() bool { return !dead && ctx.Err() == nil }
+	return writeLine, alive
 }
 
 // ServiceActionResponse wraps the service state plus any error details.
@@ -1121,6 +1119,74 @@ func handleServiceAction(w http.ResponseWriter, r *http.Request) {
 	// Allow GET for logs sub-resource
 	if action == "logs" {
 		writeJSON(w, map[string]string{"logs": serviceRecentLogs("lerd-" + name)})
+		return
+	}
+
+	// Read-only update-availability check.
+	if action == "updates" {
+		avail, err := serviceops.CheckUpdateAvailable(name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, avail)
+		return
+	}
+
+	// Streaming migration: dump current data, swap data dir, start new image,
+	// restore dump. Backups land in ~/.local/share/lerd/backups.
+	if action == "migrate" && r.Method == http.MethodPost {
+		targetTag := r.URL.Query().Get("tag")
+		if targetTag == "" {
+			http.Error(w, "tag query parameter required", http.StatusBadRequest)
+			return
+		}
+		avail, err := serviceops.CheckUpdateAvailable(name)
+		if err != nil || avail.CurrentImage == "" {
+			http.Error(w, "could not resolve current image", http.StatusBadRequest)
+			return
+		}
+		targetImage := avail.CurrentImage
+		if at := strings.LastIndex(targetImage, ":"); at > 0 {
+			targetImage = targetImage[:at] + ":" + targetTag
+		}
+		writeLine, _ := startNDJSONStream(w, r)
+		if err := serviceops.MigrateService(name, targetImage, func(ev serviceops.PhaseEvent) { writeLine(ev) }); err != nil {
+			writeLine(map[string]any{"phase": "error", "error": err.Error()})
+		}
+		return
+	}
+
+	// Streaming rollback: pull the previously-running image and restart.
+	if action == "rollback" && r.Method == http.MethodPost {
+		writeLine, _ := startNDJSONStream(w, r)
+		if err := serviceops.RollbackService(name, func(ev serviceops.PhaseEvent) { writeLine(ev) }); err != nil {
+			writeLine(map[string]any{"phase": "error", "error": err.Error()})
+		}
+		return
+	}
+
+	// Streaming update flow. Accepts ?tag=<tag> to target an explicit upgrade
+	// (e.g. cross-minor jumps that the safe-update strategy wouldn't suggest).
+	if action == "update" && r.Method == http.MethodPost {
+		targetTag := r.URL.Query().Get("tag")
+		var targetImage string
+		if targetTag != "" {
+			if avail, err := serviceops.CheckUpdateAvailable(name); err == nil && avail.CurrentImage != "" {
+				if at := strings.LastIndex(avail.CurrentImage, ":"); at > 0 {
+					targetImage = avail.CurrentImage[:at] + ":" + targetTag
+				} else {
+					targetImage = avail.CurrentImage + ":" + targetTag
+				}
+			}
+		}
+		writeLine, _ := startNDJSONStream(w, r)
+		err := serviceops.UpdateServiceStreaming(name, targetImage, func(ev serviceops.PhaseEvent) {
+			writeLine(ev)
+		})
+		if err != nil {
+			writeLine(map[string]any{"phase": "error", "error": err.Error()})
+		}
 		return
 	}
 
@@ -1273,13 +1339,7 @@ func handleServiceAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate service name — built-in or custom
-	isBuiltin := false
-	for _, s := range knownServices {
-		if s == name {
-			isBuiltin = true
-			break
-		}
-	}
+	isBuiltin := config.IsDefaultPreset(name)
 	var customSvc *config.CustomService
 	if !isBuiltin {
 		var loadErr error
@@ -1355,6 +1415,13 @@ func handleServiceAction(w http.ResponseWriter, r *http.Request) {
 			cli.RegenerateFamilyConsumersForService(name)
 		}
 	case "restart":
+		// Refresh the quadlet first so config edits and preset file mounts
+		// land on disk before systemd restarts the container.
+		if isBuiltin {
+			_ = ensureServiceQuadlet(name)
+		} else {
+			_ = ensureCustomServiceQuadlet(customSvc)
+		}
 		opErr = podman.RestartUnit(unit)
 		if opErr == nil {
 			_ = config.SetServicePaused(name, false)
@@ -1424,17 +1491,11 @@ func handleServiceAction(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ensureServiceQuadlet writes the unit file for a built-in service and reloads the service manager.
+// ensureServiceQuadlet writes the unit file for a default-preset service.
+// Delegates to serviceops so install + runtime + MCP all generate the same
+// quadlet (and re-materialise file mounts like mysql's lerd.cnf).
 func ensureServiceQuadlet(name string) error {
-	quadletName := "lerd-" + name
-	content, err := podman.GetQuadletTemplate(quadletName + ".container")
-	if err != nil {
-		return fmt.Errorf("unknown service %q", name)
-	}
-	if _, err := podman.WriteQuadletDiff(quadletName, content); err != nil {
-		return fmt.Errorf("writing unit for %s: %w", name, err)
-	}
-	return podman.DaemonReloadFn()
+	return serviceops.EnsureDefaultPresetQuadlet(name)
 }
 
 // ensureCustomServiceQuadlet writes the quadlet for a custom service and reloads systemd.
@@ -2224,6 +2285,13 @@ func handleLogs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no") // tell nginx not to buffer
+
+	// Flush headers immediately so the EventSource client fires `onopen` even
+	// when the container is idle (e.g. dnsmasq with no log-queries). Without
+	// this, scanner.Scan below blocks before any bytes hit the wire and the
+	// browser's "live" indicator never turns on.
+	_, _ = io.WriteString(w, ": connected\n\n")
+	flusher.Flush()
 
 	// If no container exists for this unit, route to the platform log stream
 	// (file tail for native services) or report not-running for container units.

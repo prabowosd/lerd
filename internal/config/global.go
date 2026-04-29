@@ -2,6 +2,10 @@ package config
 
 import (
 	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
@@ -9,10 +13,20 @@ import (
 
 // ServiceConfig holds configuration for an optional service.
 type ServiceConfig struct {
-	Enabled    bool     `yaml:"enabled"      mapstructure:"enabled"`
-	Image      string   `yaml:"image"        mapstructure:"image"`
-	Port       int      `yaml:"port"         mapstructure:"port"`
-	ExtraPorts []string `yaml:"extra_ports"  mapstructure:"extra_ports"`
+	Enabled       bool     `yaml:"enabled"        mapstructure:"enabled"`
+	Image         string   `yaml:"image"          mapstructure:"image"`
+	Port          int      `yaml:"port"           mapstructure:"port"`
+	ExtraPorts    []string `yaml:"extra_ports"    mapstructure:"extra_ports"`
+	PreviousImage string   `yaml:"previous_image,omitempty" mapstructure:"previous_image"`
+	// LastOp records the most recent mutation kind ("update" or "migrate") so
+	// the rollback flow can refuse a swap that would race the new image
+	// against the post-migrate (fresh) data dir. Empty means no recent op or a
+	// state predating the field — treated as plain update for compatibility.
+	LastOp string `yaml:"last_op,omitempty" mapstructure:"last_op"`
+	// PreMigrateBackup is the absolute path to the data dir that was preserved
+	// when the most recent operation was a migrate. Used by rollback to refuse
+	// (or, in future, restore) when undoing the migrate would corrupt data.
+	PreMigrateBackup string `yaml:"pre_migrate_backup,omitempty" mapstructure:"pre_migrate_backup"`
 }
 
 // GlobalConfig is the top-level lerd configuration.
@@ -93,44 +107,91 @@ func defaultConfig() *GlobalConfig {
 	home, _ := os.UserHomeDir()
 	cfg.ParkedDirectories = []string{home + "/Lerd"}
 
-	cfg.Services = map[string]ServiceConfig{
-		"mysql": {
-			Enabled: true,
-			Image:   "docker.io/library/mysql:8.0",
-			Port:    3306,
-		},
-		"redis": {
-			Enabled: true,
-			Image:   "docker.io/library/redis:7-alpine",
-			Port:    6379,
-		},
-		"postgres": {
-			Enabled: false,
-			Image:   "docker.io/postgis/postgis:16-3.5-alpine",
-			Port:    5432,
-		},
-		"meilisearch": {
-			Enabled: false,
-			Image:   "docker.io/getmeili/meilisearch:v1.7",
-			Port:    7700,
-		},
-		"rustfs": {
-			Enabled: false,
-			Image:   "docker.io/rustfs/rustfs:latest",
-			Port:    9000,
-		},
-		"mailpit": {
-			Enabled: false,
-			Image:   "docker.io/axllent/mailpit:latest",
-			Port:    1025,
-		},
+	// Hydrate the per-service defaults from each default-preset YAML so the
+	// preset is the single source of truth for image, host port and identity.
+	// Image overrides users have written into ~/.config/lerd/config.yaml are
+	// merged on top by viper after this point in LoadGlobal.
+	cfg.Services = map[string]ServiceConfig{}
+	for _, name := range DefaultPresetNames() {
+		svc, err := DefaultPresetMeta(name)
+		if err != nil {
+			continue
+		}
+		entry := ServiceConfig{Enabled: true, Port: firstHostPort(svc.Ports)}
+		// Skip the Image seed for track_latest presets so EnsureDefaultPresetQuadlet
+		// can detect "fresh install, no user pin" and resolve the actual current
+		// upstream tag at install time. Existing users' saved Image overrides
+		// continue to win via viper merge.
+		if p, _ := LoadPreset(name); p == nil || !p.TrackLatest {
+			entry.Image = svc.Image
+		}
+		cfg.Services[name] = entry
 	}
 	return cfg
+}
+
+// firstHostPort returns the host-side port number from the first ports entry,
+// e.g. "3306:3306" → 3306. Used by defaultConfig to populate ServiceConfig.Port
+// without mirroring the YAML port literals in code.
+func firstHostPort(ports []string) int {
+	if len(ports) == 0 {
+		return 0
+	}
+	first := ports[0]
+	if i := strings.Index(first, ":"); i >= 0 {
+		first = first[:i]
+	}
+	n, _ := strconv.Atoi(first)
+	return n
+}
+
+// globalCache memoises the last LoadGlobal result keyed on config.yaml's
+// mtime+size. The daemon's snapshot path used to call LoadGlobal hundreds of
+// times per rebuild (one per site, transitively), and each call re-parsed
+// every preset YAML via defaultConfig — pprof showed yaml.Unmarshal as the
+// dominant CPU cost. The cache returns a deep copy so callers can mutate the
+// returned struct without poisoning the cache.
+var (
+	globalCacheMu sync.Mutex
+	globalCache   *GlobalConfig
+	globalCacheAt time.Time
+	globalCacheSz int64
+)
+
+// invalidateGlobalCache drops the cached config so the next LoadGlobal re-reads
+// from disk. Called from SaveGlobal so writes are visible immediately.
+func invalidateGlobalCache() {
+	globalCacheMu.Lock()
+	globalCache = nil
+	globalCacheAt = time.Time{}
+	globalCacheSz = 0
+	globalCacheMu.Unlock()
 }
 
 // LoadGlobal reads config.yaml via viper, returning defaults if the file is absent.
 func LoadGlobal() (*GlobalConfig, error) {
 	cfgFile := GlobalConfigFile()
+
+	var (
+		statMtime time.Time
+		statSize  int64
+		statErr   error
+	)
+	if info, err := os.Stat(cfgFile); err == nil {
+		statMtime = info.ModTime()
+		statSize = info.Size()
+	} else {
+		statErr = err
+	}
+
+	globalCacheMu.Lock()
+	if globalCache != nil && statErr == nil &&
+		globalCacheAt.Equal(statMtime) && globalCacheSz == statSize {
+		out := cloneGlobalConfig(globalCache)
+		globalCacheMu.Unlock()
+		return out, nil
+	}
+	globalCacheMu.Unlock()
 
 	v := viper.NewWithOptions(viper.KeyDelimiter("::"))
 	v.SetConfigFile(cfgFile)
@@ -148,7 +209,55 @@ func LoadGlobal() (*GlobalConfig, error) {
 		return nil, err
 	}
 	migrateStaleServiceImages(cfg)
+
+	if statErr == nil {
+		globalCacheMu.Lock()
+		globalCache = cloneGlobalConfig(cfg)
+		globalCacheAt = statMtime
+		globalCacheSz = statSize
+		globalCacheMu.Unlock()
+	}
 	return cfg, nil
+}
+
+// cloneGlobalConfig returns a deep copy. Maps and slices are duplicated so
+// callers cannot mutate the cached value.
+func cloneGlobalConfig(in *GlobalConfig) *GlobalConfig {
+	out := *in
+	if in.PHP.XdebugEnabled != nil {
+		out.PHP.XdebugEnabled = make(map[string]bool, len(in.PHP.XdebugEnabled))
+		for k, v := range in.PHP.XdebugEnabled {
+			out.PHP.XdebugEnabled[k] = v
+		}
+	}
+	if in.PHP.XdebugMode != nil {
+		out.PHP.XdebugMode = make(map[string]string, len(in.PHP.XdebugMode))
+		for k, v := range in.PHP.XdebugMode {
+			out.PHP.XdebugMode[k] = v
+		}
+	}
+	if in.PHP.Extensions != nil {
+		out.PHP.Extensions = make(map[string][]string, len(in.PHP.Extensions))
+		for k, v := range in.PHP.Extensions {
+			cp := make([]string, len(v))
+			copy(cp, v)
+			out.PHP.Extensions[k] = cp
+		}
+	}
+	if in.ParkedDirectories != nil {
+		out.ParkedDirectories = append([]string(nil), in.ParkedDirectories...)
+	}
+	if in.Services != nil {
+		out.Services = make(map[string]ServiceConfig, len(in.Services))
+		for k, v := range in.Services {
+			cp := v
+			if v.ExtraPorts != nil {
+				cp.ExtraPorts = append([]string(nil), v.ExtraPorts...)
+			}
+			out.Services[k] = cp
+		}
+	}
+	return &out
 }
 
 // staleServiceImages maps service name → list of historical default images
@@ -170,9 +279,10 @@ var staleServiceImages = map[string][]string{
 		"docker.io/postgres:16-alpine",
 		"postgis/postgis:16-3.5-alpine",
 	},
-	"meilisearch": {
-		"getmeili/meilisearch:v1.7",
-	},
+	// meilisearch deliberately omitted: every minor bump breaks data-dir
+	// compatibility, so silently upgrading existing v1.7 users to v1.42
+	// would crash their running container. New installs pick up the latest
+	// minor through defaultConfig; existing users keep their pinned image.
 	"rustfs": {
 		"rustfs/rustfs:latest",
 	},
@@ -194,6 +304,13 @@ func migrateStaleServiceImages(cfg *GlobalConfig) {
 		}
 		def, hasDefault := defaults[name]
 		if !hasDefault {
+			continue
+		}
+		// Skip migration for track_latest presets where defaultConfig has no
+		// concrete image: rewriting to "" would land the user in the
+		// fresh-install path on next start, silently bumping their data dir
+		// across major-line boundaries (e.g. mysql:8.0 → 8.4 forward upgrade).
+		if def.Image == "" {
 			continue
 		}
 		for _, s := range stale {
@@ -308,5 +425,9 @@ func SaveGlobal(cfg *GlobalConfig) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(GlobalConfigFile(), data, 0644)
+	if err := os.WriteFile(GlobalConfigFile(), data, 0644); err != nil {
+		return err
+	}
+	invalidateGlobalCache()
+	return nil
 }

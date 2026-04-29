@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"sync/atomic"
@@ -9,28 +10,73 @@ import (
 
 	"github.com/geodro/lerd/internal/eventbus"
 	"github.com/geodro/lerd/internal/podman"
+	lerdSystemd "github.com/geodro/lerd/internal/systemd"
 )
 
-// visibleClients tracks how many browser tabs currently report as visible.
-// When at least one tab is focused the cache polls more aggressively.
-var visibleClients atomic.Int32
+var (
+	visibleClients atomic.Int32
+	sessionIdle    atomic.Bool
+)
 
 const (
-	intervalFocused = 15 * time.Second
-	intervalIdle    = 60 * time.Second
+	intervalFocused      = 15 * time.Second
+	intervalIdle         = 60 * time.Second
+	idleWatcherCheckTick = 30 * time.Second
+
+	// wsPingInterval is how often the server probes a connected client with
+	// a ping frame. Browsers reply within milliseconds; if no pong (or any
+	// frame) arrives within wsReadTimeout, the read deadline trips and the
+	// reader goroutine exits, releasing the connection. This is the only
+	// reliable mechanism for cleaning up half-open sockets after a tab
+	// suspend, kernel TCP timeout, or browser-side connection orphan.
+	wsPingInterval = 30 * time.Second
+	wsReadTimeout  = 75 * time.Second
 )
+
+// chooseInterval returns the cache poll cadence implied by the current
+// (visibility, session-idle) pair. Fast cadence requires both an engaged
+// browser tab and an active desktop session: a focused tab on a locked
+// laptop still drops to idle, matching the watcher's idle backoff.
+func chooseInterval(visible int32, idle bool) time.Duration {
+	if visible > 0 && !idle {
+		return intervalFocused
+	}
+	return intervalIdle
+}
+
+func recomputeInterval() {
+	podman.Cache.SetInterval(chooseInterval(visibleClients.Load(), sessionIdle.Load()))
+}
 
 func noteVisibility(visible bool) {
 	if visible {
-		if visibleClients.Add(1) == 1 {
-			podman.Cache.SetInterval(intervalFocused)
-		}
-	} else {
-		if visibleClients.Add(-1) <= 0 {
-			visibleClients.Store(0)
-			podman.Cache.SetInterval(intervalIdle)
-		}
+		visibleClients.Add(1)
+	} else if visibleClients.Add(-1) < 0 {
+		visibleClients.Store(0)
 	}
+	recomputeInterval()
+}
+
+// startIdleWatcher polls systemd-logind every 30s and recomputes the cache
+// interval when the session transitions between idle/locked and active.
+// On non-Linux SessionIsIdleOrLocked is a stub that always returns false,
+// so the interval stays driven by visibility alone.
+func startIdleWatcher(ctx context.Context) {
+	go func() {
+		t := time.NewTicker(idleWatcherCheckTick)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				idle := lerdSystemd.SessionIsIdleOrLocked()
+				if sessionIdle.Swap(idle) != idle {
+					recomputeInterval()
+				}
+			}
+		}
+	}()
 }
 
 // handleWS upgrades the HTTP connection to a websocket and streams snapshot
@@ -76,13 +122,17 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Reader goroutine: handle ping/close/visibility frames.
-	// Visibility frames carry {"type":"visibility","visible":bool} and let
-	// the server tune the container cache polling interval.
+	// Reader goroutine: handle ping/pong/close/visibility frames. The read
+	// deadline is reset before every frame; if the client falls silent
+	// (suspended tab, half-open TCP), ReadFrame returns a timeout error and
+	// the goroutine exits, which triggers the deferred cleanup below.
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		for {
+			if err := ws.SetReadDeadline(time.Now().Add(wsReadTimeout)); err != nil {
+				return
+			}
 			op, payload, err := ws.ReadFrame()
 			if err != nil {
 				return
@@ -92,6 +142,8 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
 				if err := ws.WritePong(payload); err != nil {
 					return
 				}
+			case wsOpPong:
+				// Client responded to our ping; loop body resets the deadline.
 			case wsOpClose:
 				_ = ws.WriteClose()
 				return
@@ -108,6 +160,9 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	pingTicker := time.NewTicker(wsPingInterval)
+	defer pingTicker.Stop()
+
 	for {
 		select {
 		case msg, ok := <-ch:
@@ -116,6 +171,10 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
 			}
 			frame := assembleSnapshot(msg.Sites, msg.Services, msg.Status, msg.Kinds)
 			if err := ws.WriteText(frame); err != nil {
+				return
+			}
+		case <-pingTicker.C:
+			if err := ws.WritePing(nil); err != nil {
 				return
 			}
 		case <-done:
