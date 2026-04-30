@@ -38,6 +38,7 @@ import (
 	lerdSystemd "github.com/geodro/lerd/internal/systemd"
 	lerdUpdate "github.com/geodro/lerd/internal/update"
 	"github.com/geodro/lerd/internal/version"
+	"github.com/geodro/lerd/internal/workerheal"
 	"github.com/geodro/lerd/internal/xdebugops"
 )
 
@@ -144,6 +145,12 @@ func Start(currentVersion string) error {
 	// the freshly rebuilt bytes to every connected browser.
 	go runSnapshotInvalidator()
 
+	// systemd transitions a worker to "failed" without telling lerd-ui (e.g.
+	// after start-limit-hit on a crash loop). The health watcher closes
+	// that gap by polling the cached detector on a slow tick and publishing
+	// KindSites only when the unhealthy set actually changes.
+	go runWorkerHealthWatcher()
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/status", withCORS(handleStatus))
@@ -191,6 +198,9 @@ func Start(currentVersion string) error {
 	mux.HandleFunc("/api/settings", withCORS(handleSettings))
 	mux.HandleFunc("/api/settings/autostart", withCORS(handleSettingsAutostart))
 	mux.HandleFunc("/api/settings/worker-mode", withCORS(handleSettingsWorkerMode))
+	mux.HandleFunc("/api/workers/health", withCORS(handleWorkersHealth))
+	mux.HandleFunc("/api/workers/heal", withCORS(handleWorkersHeal))
+	mux.HandleFunc("/api/stats", withCORS(handleStats))
 	mux.HandleFunc("/api/xdebug/", withCORS(publishAfter(handleXdebugAction, eventbus.KindStatus)))
 	mux.HandleFunc("/api/lerd/start", withCORS(handleLerdStart))
 	mux.HandleFunc("/api/lerd/stop", withCORS(handleLerdStop))
@@ -2423,6 +2433,40 @@ func handleSettingsWorkerMode(w http.ResponseWriter, r *http.Request) {
 		writeLine(evt)
 	}); err != nil {
 		writeLine(cli.WorkerModePhaseEvent{Phase: "error", Error: err.Error()})
+	}
+}
+
+// handleWorkersHealth reports every worker unit currently in the systemd
+// "failed" state, grouped per site. Reads the existing batched unit-state
+// cache so polling stays cheap (no extra subprocess per request); each
+// entry is enriched with the last journal line so the dashboard can show
+// "why did this fail?" without a drill-down.
+func handleWorkersHealth(w http.ResponseWriter, _ *http.Request) {
+	unhealthy, err := cli.DetectUnhealthyWorkers()
+	if err != nil {
+		writeJSON(w, map[string]any{"unhealthy": []cli.UnhealthyWorker{}, "error": err.Error()})
+		return
+	}
+	if unhealthy == nil {
+		unhealthy = []cli.UnhealthyWorker{}
+	}
+	unhealthy = workerheal.Enrich(unhealthy)
+	writeJSON(w, map[string]any{"unhealthy": unhealthy})
+}
+
+// handleWorkersHeal streams NDJSON heal events to the dashboard so the
+// banner can show real per-unit progress. Heal is intentionally narrow:
+// reset-failed + start; no .lerd.yaml or unit-file writes.
+func handleWorkersHeal(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeLine, _ := startNDJSONStream(w, r)
+	if _, err := cli.HealWorkers(func(evt cli.HealEvent) {
+		writeLine(evt)
+	}); err != nil {
+		writeLine(cli.HealEvent{Phase: "failed", Error: err.Error()})
 	}
 }
 
