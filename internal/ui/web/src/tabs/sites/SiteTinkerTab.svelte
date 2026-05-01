@@ -433,7 +433,7 @@
   }
 </script>
 
-<div class="flex-1 flex flex-col min-h-0 overflow-hidden p-3 sm:p-5 gap-3">
+<div class="flex-1 flex flex-col min-h-0 overflow-hidden pt-4 px-3 sm:px-5 pb-3 sm:pb-5 gap-3">
   <div class="flex items-center justify-between">
     <div class="flex items-center gap-2">
       <span
