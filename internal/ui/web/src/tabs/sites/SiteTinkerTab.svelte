@@ -448,12 +448,6 @@
     </div>
     <div class="flex items-center gap-2">
       <button
-        onclick={() => copyText(code)}
-        disabled={!code.trim()}
-        class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-lerd-border text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/5 disabled:opacity-40"
-        title="Copy editor contents to clipboard"
-      >Copy code</button>
-      <button
         onclick={clearAll}
         disabled={!code && !result}
         class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-lerd-border text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/5 disabled:opacity-40"
@@ -472,9 +466,16 @@
 
   <div class="flex-1 flex flex-col md:flex-row min-h-0 gap-3">
     <div
-      class="flex-1 min-h-[160px] md:min-h-0 md:basis-1/2 flex flex-col rounded-lg border border-gray-200 dark:border-lerd-border overflow-hidden bg-gray-50 dark:bg-black/40"
+      class="group flex-1 min-h-[160px] md:min-h-0 md:basis-1/2 flex flex-col rounded-lg border border-gray-200 dark:border-lerd-border overflow-hidden bg-gray-50 dark:bg-black/40 relative"
     >
       <div class="flex-1 min-h-0 overflow-hidden" bind:this={editorContainer}></div>
+      {#if code.trim()}
+        <button
+          onclick={() => copyText(code)}
+          title="Copy editor contents to clipboard"
+          class="absolute top-2 right-2 z-10 opacity-0 group-hover:opacity-100 text-[10px] px-1.5 py-0.5 rounded border border-gray-200 dark:border-lerd-border bg-white/90 dark:bg-lerd-card/90 text-gray-500 hover:text-gray-700 dark:hover:text-gray-200 transition-opacity"
+        >Copy</button>
+      {/if}
     </div>
 
     <div
