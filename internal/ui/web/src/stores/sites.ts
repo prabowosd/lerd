@@ -200,13 +200,25 @@ export async function lintTinker(domain: string, code: string): Promise<TinkerLi
   }
 }
 
+// Symbol responses are stable for the lifetime of the tab session
+// (project classes, composer helpers, PHP internals don't change while
+// the user is at the editor). Cache per-domain so quick tab switches
+// don't re-trigger the ~80 ms PHP exec on the backend.
+const tinkerSymbolsCache = new Map<string, Promise<TinkerSymbols>>();
+
 export async function loadTinkerSymbols(domain: string): Promise<TinkerSymbols> {
-  try {
-    const res = await apiFetch(site(domain, 'tinker:symbols'), { method: 'POST' });
-    return (await res.json()) as TinkerSymbols;
-  } catch {
-    return { models: [], classes: [], functions: [] };
-  }
+  const cached = tinkerSymbolsCache.get(domain);
+  if (cached) return cached;
+  const p = (async () => {
+    try {
+      const res = await apiFetch(site(domain, 'tinker:symbols'), { method: 'POST' });
+      return (await res.json()) as TinkerSymbols;
+    } catch {
+      return { models: [], classes: [], functions: [] };
+    }
+  })();
+  tinkerSymbolsCache.set(domain, p);
+  return p;
 }
 
 export async function runTinker(domain: string, code: string): Promise<TinkerResponse> {

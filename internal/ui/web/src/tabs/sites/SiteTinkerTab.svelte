@@ -298,13 +298,39 @@
     return Array.from(new Set(xs));
   }
 
-  // PHP linter — debounced server-side `php -l` check, with errors and
-  // warnings rendered inline in the editor gutter and as underlines.
+  // PHP linter — debounced server-side `php -l` check. Each invocation
+  // spawns `podman exec lerd-phpXX-fpm php -l`, which is expensive
+  // (~50–100 ms of host CPU per call), so we:
+  //  1) wait 1.5s after typing stops before linting,
+  //  2) memoize on the exact code string so re-runs with no edit reuse
+  //     the previous diagnostics,
+  //  3) cancel in-flight requests when the doc changes again.
+  let lastLintCode = '';
+  let lastLintDiags: Diagnostic[] = [];
+  let lintAbort: AbortController | null = null;
+
   const phpLinter = linter(
     async (view) => {
       const code = view.state.doc.toString();
-      if (!code.trim()) return [];
-      const res = await lintTinker(site.domain, code);
+      if (!code.trim()) {
+        lastLintCode = '';
+        lastLintDiags = [];
+        return [];
+      }
+      if (code === lastLintCode) return lastLintDiags;
+
+      lintAbort?.abort();
+      const ctrl = new AbortController();
+      lintAbort = ctrl;
+
+      let res;
+      try {
+        res = await lintTinker(site.domain, code);
+      } catch {
+        return lastLintDiags;
+      }
+      if (ctrl.signal.aborted) return lastLintDiags;
+
       const out: Diagnostic[] = [];
       for (const d of res.diagnostics ?? []) {
         const ln = Math.max(1, Math.min(d.line, view.state.doc.lines));
@@ -316,9 +342,13 @@
           message: d.message
         });
       }
+      lastLintCode = code;
+      lastLintDiags = out;
       return out;
     },
-    { delay: 600 }
+    // 2.5 s is "you've clearly stopped typing" for normal cadence —
+    // we'd rather miss the occasional check than lint mid-keystroke.
+    { delay: 2500 }
   );
 
   // Buffer variable source: scans the editor for $varname tokens and
