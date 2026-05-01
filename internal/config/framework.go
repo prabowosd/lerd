@@ -1036,8 +1036,16 @@ type FrameworkTinker struct {
 	Command []string `yaml:"command"`
 	// ExecuteFlag, when set, is the flag used to pass user code as a
 	// single argument. Example: "--execute" → `--execute=<code>`.
-	// When empty, user code is piped to the process via stdin.
+	// Mutually exclusive with ExecutePositional.
 	ExecuteFlag string `yaml:"execute_flag,omitempty"`
+	// ExecutePositional, when true, appends user code as a final
+	// positional argv element instead of using a flag. Useful for tools
+	// like `drush php:eval <code>` and `wp eval <code>` that take code
+	// as a bare argument. Mutually exclusive with ExecuteFlag.
+	ExecutePositional bool `yaml:"execute_positional,omitempty"`
+	// When neither ExecuteFlag nor ExecutePositional is set, user code
+	// is piped to the process via stdin.
+	//
 	// RequiresPackage is the composer package that must be installed in
 	// vendor/ for this REPL to work. Example: "laravel/tinker".
 	// When the package isn't found, lerd falls back to plain PHP.

@@ -113,9 +113,12 @@ func RunTinker(ctx context.Context, sitePath, code string) (TinkerResult, error)
 		argv = append([]string{"exec", "-i", "-w", sitePath}, envArgs...)
 		argv = append(argv, container, "php")
 		argv = append(argv, tinkerSpec.Command...)
-		if tinkerSpec.ExecuteFlag != "" {
+		switch {
+		case tinkerSpec.ExecuteFlag != "":
 			argv = append(argv, tinkerSpec.ExecuteFlag+"="+payload)
-		} else {
+		case tinkerSpec.ExecutePositional:
+			argv = append(argv, payload)
+		default:
 			stdinPipe = payload
 		}
 	} else {
