@@ -346,9 +346,12 @@
       lastLintDiags = out;
       return out;
     },
-    // 2.5 s is "you've clearly stopped typing" for normal cadence —
-    // we'd rather miss the occasional check than lint mid-keystroke.
-    { delay: 2500 }
+    // CodeMirror's linter debounces by `delay`: it waits this many ms
+    // after the LAST edit before firing. Combined with the memoize
+    // above (return cached if the buffer didn't change since last
+    // lint), we get exactly one fire at the end of a typing burst,
+    // skipped entirely on no-op refreshes.
+    { delay: 600 }
   );
 
   // Buffer variable source: scans the editor for $varname tokens and
