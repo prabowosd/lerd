@@ -76,10 +76,10 @@ func TestFindParentSiteForWorktree_unregisteredDir(t *testing.T) {
 // WorktreeDBName matches the projectDBName underscore convention.
 func TestWorktreeDBName_underscoreSlug(t *testing.T) {
 	cases := map[[2]string]string{
-		{"acme", "feat-a"}:        "acme_feat_a",
-		{"my_app", "feature/x"}:   "my_app_feature/x", // sanitization happens at branch detection time, not here
-		{"acme_app", "feat-x-y"}:  "acme_app_feat_x_y",
-		{"acme", "RELEASE-1"}:     "acme_release_1",
+		{"acme", "feat-a"}:       "acme_feat_a",
+		{"my_app", "feature/x"}:  "my_app_feature/x", // sanitization happens at branch detection time, not here
+		{"acme_app", "feat-x-y"}: "acme_app_feat_x_y",
+		{"acme", "RELEASE-1"}:    "acme_release_1",
 	}
 	for in, want := range cases {
 		if got := WorktreeDBName(in[0], in[1]); got != want {
