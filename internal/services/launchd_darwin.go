@@ -782,16 +782,26 @@ func (m *darwinServiceManager) UnitStatus(name string) (string, error) {
 	if podman.Cache.Running(name) {
 		return "active", nil
 	}
-	// Container units: the plist is in the launchd domain (user wants it
-	// running), the launcher process isn't active, and the container isn't
-	// running. For `podman run -d` with --restart=always this typically means
-	// the container started once, then crashed and couldn't come back — data
-	// dir / image incompatibility, port collision, or the like. Treat as
-	// failed so workerheal.Detect can surface it. Service units with
-	// RunAtLoad=true would have already returned "active" above; the only
-	// inactive-but-loaded state for them is intentional (Stop without
-	// bootout), which Stop avoids — bootout is the only stop path.
-	if isContainerPlist(out) {
+	// Universal failure signal: an explicit non-zero last exit code is
+	// "this is broken" regardless of whether the plist is a container
+	// launcher (mysql, postgres, …) or a runtime-mode worker (queue,
+	// schedule, horizon — `/bin/sh worker.sh` → `podman exec ... php
+	// artisan ...`). Without this, runtime workers between retries would
+	// fall through to the state=waiting/exit=0 branch and surface as
+	// "inactive" even though the previous run aborted with exit != 0.
+	if hasNonZeroExitCode(s) {
+		return "failed", nil
+	}
+	// Container units that exited cleanly (last exit code = 0) but whose
+	// detached container isn't currently running are crashed post-detach —
+	// `podman run -d` returned 0, the container died after, --restart=always
+	// can't bring it back (data dir / image / port issue). Treat as failed
+	// so workerheal.Detect picks them up. Skip when the launcher hasn't
+	// completed yet ("(never exited)"): that's the brief window between
+	// Start() returning and ContainerCache picking up the new state, and
+	// reporting "failed" there would be a false positive that could trigger
+	// spurious heal cycles on every fresh start.
+	if isContainerPlist(out) && strings.Contains(s, "last exit code = 0") {
 		return "failed", nil
 	}
 	if strings.Contains(s, "state = waiting") || strings.Contains(s, "last exit code = 0") {
@@ -800,10 +810,35 @@ func (m *darwinServiceManager) UnitStatus(name string) (string, error) {
 	return "failed", nil
 }
 
+// hasNonZeroExitCode reports whether the launchctl print output has a
+// "last exit code = N" line where N is neither 0 nor "(never exited)".
+// Returns false when the field is absent so newly-bootstrapped units that
+// haven't run yet aren't misreported as failed.
+func hasNonZeroExitCode(s string) bool {
+	const key = "last exit code = "
+	idx := strings.Index(s, key)
+	if idx < 0 {
+		return false
+	}
+	rest := s[idx+len(key):]
+	end := strings.IndexByte(rest, '\n')
+	if end < 0 {
+		end = len(rest)
+	}
+	val := strings.TrimSpace(rest[:end])
+	if val == "" || val == "0" || val == "(never exited)" {
+		return false
+	}
+	return true
+}
+
 // isContainerPlist reports whether the launchctl print output describes a
-// container-unit plist (i.e. the launcher exec'd `podman run`). Used by
-// UnitStatus to differentiate container units that crashed (failed) from
-// service units in transient inactive states.
+// container-unit plist (i.e. the launcher exec'd `podman run`). Runtime-mode
+// workers launch via `/bin/sh worker.sh` so the launchctl-visible program
+// path doesn't include `/podman`; the embedded `podman exec` call lives
+// inside the script and is invisible here. Used by UnitStatus to
+// differentiate container units that crashed post-detach from runtime
+// workers in transient inactive states.
 func isContainerPlist(out []byte) bool {
 	s := string(out)
 	return strings.Contains(s, "/podman") && strings.Contains(s, "run")
