@@ -584,8 +584,11 @@ func (m *darwinServiceManager) Start(name string) error {
 			if !strings.Contains(string(content2), "<key>RunAtLoad</key>") {
 				if args, aerr := plistArgs(p); aerr == nil && len(args) > 0 {
 					podmanStartSem <- struct{}{}
-					exec.Command(args[0], args[1:]...).Run() //nolint:errcheck
+					rerr := runPodmanWithError(args)
 					<-podmanStartSem
+					if rerr != nil {
+						return fmt.Errorf("podman run %s: %w", name, rerr)
+					}
 					return nil
 				}
 			}
@@ -628,9 +631,30 @@ func (m *darwinServiceManager) Start(name string) error {
 		return nil
 	}
 	podmanStartSem <- struct{}{}
-	cmd := exec.Command(args[0], args[1:]...)
-	cmd.Run() //nolint:errcheck
+	rerr := runPodmanWithError(args)
 	<-podmanStartSem
+	if rerr != nil {
+		return fmt.Errorf("podman run %s: %w", name, rerr)
+	}
+	return nil
+}
+
+// runPodmanWithError invokes the podman command and surfaces stderr in the
+// returned error. The launcher process detaches once `podman run -d` accepts
+// the request, so a non-nil error here means podman itself rejected the run
+// (image missing, port collision, machine down) — exactly the cases that
+// were previously masked under //nolint:errcheck and made the heal loop
+// report success on a unit that never started.
+func runPodmanWithError(args []string) error {
+	cmd := exec.Command(args[0], args[1:]...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		trimmed := strings.TrimSpace(string(out))
+		if trimmed == "" {
+			return err
+		}
+		return fmt.Errorf("%w: %s", err, trimmed)
+	}
 	return nil
 }
 
@@ -758,10 +782,31 @@ func (m *darwinServiceManager) UnitStatus(name string) (string, error) {
 	if podman.Cache.Running(name) {
 		return "active", nil
 	}
+	// Container units: the plist is in the launchd domain (user wants it
+	// running), the launcher process isn't active, and the container isn't
+	// running. For `podman run -d` with --restart=always this typically means
+	// the container started once, then crashed and couldn't come back — data
+	// dir / image incompatibility, port collision, or the like. Treat as
+	// failed so workerheal.Detect can surface it. Service units with
+	// RunAtLoad=true would have already returned "active" above; the only
+	// inactive-but-loaded state for them is intentional (Stop without
+	// bootout), which Stop avoids — bootout is the only stop path.
+	if isContainerPlist(out) {
+		return "failed", nil
+	}
 	if strings.Contains(s, "state = waiting") || strings.Contains(s, "last exit code = 0") {
 		return "inactive", nil
 	}
 	return "failed", nil
+}
+
+// isContainerPlist reports whether the launchctl print output describes a
+// container-unit plist (i.e. the launcher exec'd `podman run`). Used by
+// UnitStatus to differentiate container units that crashed (failed) from
+// service units in transient inactive states.
+func isContainerPlist(out []byte) bool {
+	s := string(out)
+	return strings.Contains(s, "/podman") && strings.Contains(s, "run")
 }
 
 // AllUnitStates enumerates every lerd-* plist in ~/Library/LaunchAgents and
