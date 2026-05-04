@@ -388,12 +388,12 @@ func TestLogFilter_dropsLinesMentioningUserDomain(t *testing.T) {
 
 func TestRedactGenericPII_redactsCommonShapes(t *testing.T) {
 	cases := map[string]string{
-		"contact alice@example.com please":                      "contact <redacted-email> please",
-		"Authorization: Bearer ya29.A0AbcDEFghijklmnop":          "Authorization: Bearer <redacted>",
-		"token ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789 leaked": "<redacted-token> leaked",
-		"jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c done":            "jwt <redacted-jwt> done",
-		"clone git@github.com:secret/myrepo.git here":                                                            "clone <redacted-git-remote> here",
-		"https origin: https://github.com/private/internal.git pulled":                                           "https origin: <redacted-git-remote> pulled",
+		"contact alice@example.com please":                                                             "contact <redacted-email> please",
+		"Authorization: Bearer ya29.A0AbcDEFghijklmnop":                                                "Authorization: Bearer <redacted>",
+		"token ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789 leaked":                                        "<redacted-token> leaked",
+		"jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c done": "jwt <redacted-jwt> done",
+		"clone git@github.com:secret/myrepo.git here":                                                  "clone <redacted-git-remote> here",
+		"https origin: https://github.com/private/internal.git pulled":                                 "https origin: <redacted-git-remote> pulled",
 	}
 	for in, want := range cases {
 		if got := redactGenericPII(in); got != want {
@@ -420,13 +420,13 @@ func TestRedactGenericPII_idempotent(t *testing.T) {
 
 func TestRedactNonLoopbackAddrs_keepsLoopback(t *testing.T) {
 	cases := map[string]string{
-		"LISTEN 0 0 127.0.0.1:53 0.0.0.0:* lerd-dns":   "LISTEN 0 0 127.0.0.1:53 0.0.0.0:* lerd-dns",
-		"LISTEN 0 0 ::1:443 *:*":                       "LISTEN 0 0 ::1:443 *:*",
-		"LISTEN 0 0 192.168.1.10:80 *:*":               "LISTEN 0 0 <redacted-ip>:80 *:*",
-		"LISTEN 0 0 169.254.169.254:80 *:*":            "LISTEN 0 0 169.254.169.254:80 *:*",
-		"connection from 10.89.7.8 to 10.89.0.1":       "connection from <redacted-ip> to <redacted-ip>",
-		"fe80::1%en0 link-local":                       "fe80::1%en0 link-local",
-		"2001:db8::1 public ipv6":                      "<redacted-ip> public ipv6",
+		"LISTEN 0 0 127.0.0.1:53 0.0.0.0:* lerd-dns": "LISTEN 0 0 127.0.0.1:53 0.0.0.0:* lerd-dns",
+		"LISTEN 0 0 ::1:443 *:*":                     "LISTEN 0 0 ::1:443 *:*",
+		"LISTEN 0 0 192.168.1.10:80 *:*":             "LISTEN 0 0 <redacted-ip>:80 *:*",
+		"LISTEN 0 0 169.254.169.254:80 *:*":          "LISTEN 0 0 169.254.169.254:80 *:*",
+		"connection from 10.89.7.8 to 10.89.0.1":     "connection from <redacted-ip> to <redacted-ip>",
+		"fe80::1%en0 link-local":                     "fe80::1%en0 link-local",
+		"2001:db8::1 public ipv6":                    "<redacted-ip> public ipv6",
 	}
 	for in, want := range cases {
 		if got := redactNonLoopbackAddrs(in); got != want {

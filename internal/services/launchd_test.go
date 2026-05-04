@@ -18,13 +18,13 @@ import (
 // every fresh start.
 func TestHasNonZeroExitCode(t *testing.T) {
 	cases := map[string]bool{
-		"state = waiting\n\tlast exit code = 0\n":              false,
-		"state = waiting\n\tlast exit code = 1\n":              true,
-		"state = not running\n\tlast exit code = 1\n":          true,
-		"state = not running\n\tlast exit code = 137\n":        true,
+		"state = waiting\n\tlast exit code = 0\n":                  false,
+		"state = waiting\n\tlast exit code = 1\n":                  true,
+		"state = not running\n\tlast exit code = 1\n":              true,
+		"state = not running\n\tlast exit code = 137\n":            true,
 		"state = not running\n\tlast exit code = (never exited)\n": false,
-		"state = running\n":                                    false, // no exit code line at all
-		"":                                                     false,
+		"state = running\n":                                        false, // no exit code line at all
+		"":                                                         false,
 	}
 	for in, want := range cases {
 		if got := hasNonZeroExitCode(in); got != want {
