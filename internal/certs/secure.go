@@ -46,12 +46,12 @@ func SecureSite(site config.Site) error {
 		return fmt.Errorf("renaming SSL config: %w", err)
 	}
 
-	// Regenerate SSL vhosts and update APP_URL for any worktrees.
+	// Regenerate SSL vhosts and sync APP_URL + VITE_REVERB_* for worktrees.
 	if worktrees, err := gitpkg.DetectWorktrees(site.Path, site.PrimaryDomain()); err == nil {
 		for _, wt := range worktrees {
 			effectivePHP := config.WorktreePHPVersion(wt.Path, site.PHPVersion)
 			_ = nginx.GenerateWorktreeSSLVhost(wt.Domain, wt.Path, effectivePHP, site.PrimaryDomain())
-			envfile.UpdateAppURL(wt.Path, "https", wt.Domain) //nolint:errcheck
+			envfile.SyncPrimaryDomain(wt.Path, wt.Domain, true) //nolint:errcheck
 		}
 	}
 
@@ -115,12 +115,12 @@ func UnsecureSite(site config.Site) error {
 		return fmt.Errorf("generating HTTP vhost: %w", err)
 	}
 
-	// Switch any worktree SSL vhosts back to plain HTTP and update APP_URL.
+	// Switch any worktree SSL vhosts back to plain HTTP and sync env.
 	if worktrees, err := gitpkg.DetectWorktrees(site.Path, site.PrimaryDomain()); err == nil {
 		for _, wt := range worktrees {
 			effectivePHP := config.WorktreePHPVersion(wt.Path, site.PHPVersion)
 			_ = nginx.GenerateWorktreeVhost(wt.Domain, wt.Path, effectivePHP)
-			envfile.UpdateAppURL(wt.Path, "http", wt.Domain) //nolint:errcheck
+			envfile.SyncPrimaryDomain(wt.Path, wt.Domain, false) //nolint:errcheck
 		}
 	}
 
