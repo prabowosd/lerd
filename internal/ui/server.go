@@ -1760,15 +1760,21 @@ type VersionResponse struct {
 
 func handleVersion(w http.ResponseWriter, _ *http.Request, currentVersion string) {
 	info, _ := lerdUpdate.CachedUpdateCheck(currentVersion)
+	writeJSON(w, buildVersionResponse(currentVersion, info))
+}
+
+// buildVersionResponse builds the wire payload for /api/version. The
+// dashboard banner template already prepends "v" so the Latest field
+// must be stripped of any leading v from the GitHub tag, otherwise
+// users see "vv1.20.0" in the banner.
+func buildVersionResponse(currentVersion string, info *lerdUpdate.UpdateInfo) VersionResponse {
 	resp := VersionResponse{Current: currentVersion}
 	if info != nil {
-		// The dashboard banner template ("Lerd v{version} is available")
-		// already includes the v, so the wire payload must be bare.
 		resp.Latest = lerdUpdate.StripV(info.LatestVersion)
 		resp.HasUpdate = true
 		resp.Changelog = info.Changelog
 	}
-	writeJSON(w, resp)
+	return resp
 }
 
 func handlePHPVersions(w http.ResponseWriter, _ *http.Request) {
@@ -2899,12 +2905,18 @@ func handleLerdUpdateTerminal(w http.ResponseWriter, r *http.Request) {
 	if err != nil || self == "" {
 		self = "lerd"
 	}
-	script := shQuote(self) + ` update; echo; read -rp "Press Enter to close..."`
-	if err := openTerminalCommand(script); err != nil {
+	if err := openTerminalCommand(buildUpdateScript(self)); err != nil {
 		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true})
+}
+
+// buildUpdateScript returns the sh -c payload the spawned terminal runs.
+// Extracted so tests can pin the absolute-path quoting without launching
+// a real terminal emulator.
+func buildUpdateScript(executable string) string {
+	return shQuote(executable) + ` update; echo; read -rp "Press Enter to close..."`
 }
 
 // openTerminalCommand opens the user's terminal emulator and runs the given
