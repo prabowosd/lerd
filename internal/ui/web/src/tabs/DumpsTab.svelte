@@ -11,6 +11,7 @@
     stopDumpsStream,
     refreshStatus,
     clearDumps,
+    toggleDumps,
     buildDumpGroups
   } from '$stores/dumps';
   import DumpEntry from '$components/DumpEntry.svelte';
@@ -53,6 +54,18 @@
   async function onClear() {
     await clearDumps();
   }
+
+  let enabling = $state(false);
+  async function onEnable() {
+    if (enabling) return;
+    enabling = true;
+    try {
+      await toggleDumps(true);
+      await refreshStatus();
+    } finally {
+      enabling = false;
+    }
+  }
 </script>
 
 <div class="flex flex-col h-full overflow-hidden">
@@ -92,13 +105,28 @@
 
   <div class="flex-1 overflow-y-auto px-4 pb-3">
     {#if groups.length === 0}
-      <EmptyState title={$status?.enabled ? 'Waiting for dumps…' : 'Dump bridge is disabled'}>
-        {#snippet hint()}
-          {$status?.enabled
-            ? 'Trigger a dump() or dd() in your PHP code and it will appear here.'
-            : 'Run `lerd dump on` or click Enable bridge above to start capturing.'}
-        {/snippet}
-      </EmptyState>
+      {#if !$status?.enabled}
+        <div class="px-4 py-10 text-center space-y-3">
+          <p class="text-sm text-gray-500 dark:text-gray-400">Dump bridge is disabled</p>
+          <p class="text-[11px] text-gray-400 dark:text-gray-500">
+            Trigger a dump() or dd() and it will appear here once captures are on.
+          </p>
+          <button
+            type="button"
+            disabled={enabling}
+            onclick={onEnable}
+            class="inline-flex items-center gap-1.5 text-xs rounded border border-emerald-500/40 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 px-3 py-1.5 hover:border-emerald-500 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 disabled:opacity-50"
+          >
+            {enabling ? 'Enabling…' : 'Enable dump bridge'}
+          </button>
+        </div>
+      {:else}
+        <EmptyState title="Waiting for dumps…">
+          {#snippet hint()}
+            Trigger a dump() or dd() in your PHP code and it will appear here.
+          {/snippet}
+        </EmptyState>
+      {/if}
     {:else}
       {#each groups as group (group.key)}
         <section class="mb-4">
