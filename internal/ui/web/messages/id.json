@@ -510,5 +510,14 @@
   "services_delete_body": "Menghentikan unit, menghapus kontainer, dan menghapus konfigurasi layanan. Layanan bawaan dapat dipasang ulang nanti dari daftar preset.",
   "services_delete_removeDataLabel": "Hapus juga data layanan",
   "services_delete_removeDataHint": "Mengganti nama ~/.local/share/lerd/data/{name} menjadi {name}.pre-remove-<ts> (dapat dipulihkan).",
-  "services_delete_submitting": "Menghapus…"
+  "services_delete_submitting": "Menghapus…",
+  "worktreeDb_title": "Isolasi basis data worktree",
+  "worktreeDb_body": "Basis data baru akan dibuat untuk worktree {branch}. Pilih dari mana data tersebut harus dimulai.",
+  "worktreeDb_cloneFromMain": "Klon dari main ({domain})",
+  "worktreeDb_empty": "Basis data kosong",
+  "worktreeDb_cloneFromBranch": "Klon dari {branch}",
+  "worktreeDb_cloneFromBranchDb": "Klon dari {branch} ({db})",
+  "worktreeDb_cloningHint": "Kloning menjalankan mysqldump | mysql (atau pg_dump | psql) di dalam kontainer layanan.",
+  "worktreeDb_isolateAction": "Isolasi",
+  "lanShare_qrAlt": "Kode QR"
 }

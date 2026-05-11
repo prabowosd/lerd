@@ -510,5 +510,14 @@
   "services_delete_body": "Arrête l'unité, supprime le conteneur et efface la config du service. Les services par défaut pourront être réinstallés depuis la liste des presets.",
   "services_delete_removeDataLabel": "Supprimer aussi les données du service",
   "services_delete_removeDataHint": "Renomme ~/.local/share/lerd/data/{name} en {name}.pre-remove-<ts> (récupérable).",
-  "services_delete_submitting": "Suppression…"
+  "services_delete_submitting": "Suppression…",
+  "worktreeDb_title": "Isoler la base de données du worktree",
+  "worktreeDb_body": "Une nouvelle base de données sera créée pour le worktree {branch}. Choisis sur quoi elle doit partir.",
+  "worktreeDb_cloneFromMain": "Cloner depuis main ({domain})",
+  "worktreeDb_empty": "Base de données vide",
+  "worktreeDb_cloneFromBranch": "Cloner depuis {branch}",
+  "worktreeDb_cloneFromBranchDb": "Cloner depuis {branch} ({db})",
+  "worktreeDb_cloningHint": "Le clonage exécute mysqldump | mysql (ou pg_dump | psql) dans le conteneur du service.",
+  "worktreeDb_isolateAction": "Isoler",
+  "lanShare_qrAlt": "Code QR"
 }

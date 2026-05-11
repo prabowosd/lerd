@@ -510,5 +510,14 @@
   "services_delete_body": "Stopt de unit, verwijdert de container en wist de serviceconfiguratie. Standaardservices kunnen later opnieuw worden geïnstalleerd vanuit de presetlijst.",
   "services_delete_removeDataLabel": "Ook servicegegevens verwijderen",
   "services_delete_removeDataHint": "Hernoemt ~/.local/share/lerd/data/{name} naar {name}.pre-remove-<ts> (herstelbaar).",
-  "services_delete_submitting": "Verwijderen…"
+  "services_delete_submitting": "Verwijderen…",
+  "worktreeDb_title": "Worktree-database isoleren",
+  "worktreeDb_body": "Er wordt een nieuwe database aangemaakt voor de worktree {branch}. Kies waar die mee moet beginnen.",
+  "worktreeDb_cloneFromMain": "Klonen van main ({domain})",
+  "worktreeDb_empty": "Lege database",
+  "worktreeDb_cloneFromBranch": "Klonen van {branch}",
+  "worktreeDb_cloneFromBranchDb": "Klonen van {branch} ({db})",
+  "worktreeDb_cloningHint": "Klonen voert mysqldump | mysql (of pg_dump | psql) uit binnen de servicecontainer.",
+  "worktreeDb_isolateAction": "Isoleren",
+  "lanShare_qrAlt": "QR-code"
 }

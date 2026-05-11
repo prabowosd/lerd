@@ -510,5 +510,14 @@
   "services_delete_body": "Para a unidade, remove o contêiner e exclui a configuração do serviço. Serviços padrão podem ser reinstalados depois pela lista de presets.",
   "services_delete_removeDataLabel": "Também remover os dados do serviço",
   "services_delete_removeDataHint": "Renomeia ~/.local/share/lerd/data/{name} para {name}.pre-remove-<ts> (recuperável).",
-  "services_delete_submitting": "Removendo…"
+  "services_delete_submitting": "Removendo…",
+  "worktreeDb_title": "Isolar o banco de dados do worktree",
+  "worktreeDb_body": "Um novo banco de dados será criado para o worktree {branch}. Escolha de onde ele deve partir.",
+  "worktreeDb_cloneFromMain": "Clonar do main ({domain})",
+  "worktreeDb_empty": "Banco de dados vazio",
+  "worktreeDb_cloneFromBranch": "Clonar de {branch}",
+  "worktreeDb_cloneFromBranchDb": "Clonar de {branch} ({db})",
+  "worktreeDb_cloningHint": "A clonagem executa mysqldump | mysql (ou pg_dump | psql) dentro do contêiner do serviço.",
+  "worktreeDb_isolateAction": "Isolar",
+  "lanShare_qrAlt": "Código QR"
 }
