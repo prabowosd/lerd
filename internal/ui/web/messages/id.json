@@ -246,6 +246,8 @@
   "sites_badges_frankenphpWorkerTitle": "Mode worker FrankenPHP",
   "sites_appLogs_waiting": "Menunggu keluaran log...",
   "sites_appLogs_empty": "Tidak ada entri log ditemukan.",
+  "sites_appLogs_noFilesWorktree": "Belum ada berkas log di storage/logs worktree ini. Akan muncul di sini begitu aplikasi menulis satu.",
+  "sites_appLogs_noFiles": "Belum ada berkas log di storage/logs. Akan muncul di sini begitu aplikasi menulis satu.",
   "sites_appLogs_search": "Cari log...",
   "sites_appLogs_latest": "Terbaru",
   "sites_appLogs_all": "Semua",

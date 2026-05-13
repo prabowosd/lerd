@@ -246,6 +246,8 @@
   "sites_badges_frankenphpWorkerTitle": "Mode worker FrankenPHP",
   "sites_appLogs_waiting": "En attente de sortie du log...",
   "sites_appLogs_empty": "Aucune entrée de log trouvée.",
+  "sites_appLogs_noFilesWorktree": "Aucun fichier de log dans storage/logs de ce worktree pour l'instant. Ils apparaîtront ici dès que l'application en écrit un.",
+  "sites_appLogs_noFiles": "Aucun fichier de log dans storage/logs pour l'instant. Ils apparaîtront ici dès que l'application en écrit un.",
   "sites_appLogs_search": "Rechercher dans les logs...",
   "sites_appLogs_latest": "Récents",
   "sites_appLogs_all": "Tous",
