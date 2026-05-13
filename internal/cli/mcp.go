@@ -1351,7 +1351,7 @@ The ` + bt + `container.port` + bt + ` field is required. ` + bt + `container.co
 | ` + bt + `services` + bt + ` | Services to start (e.g. ` + bt + `[mysql, redis]` + bt + `) |
 | ` + bt + `workers` + bt + ` | Active worker names (e.g. ` + bt + `[queue, schedule]` + bt + `) — auto-synced by start/stop |
 | ` + bt + `app_url` + bt + ` | Override for APP_URL in ` + bt + `.env` + bt + ` |
-| ` + bt + `env_overrides` + bt + ` | Map of env var names → templated or static values written into per-worktree ` + bt + `.env` + bt + ` files when worktrees are created or re-synced by the watcher. Values may use ` + bt + `{{domain}}` + bt + `, ` + bt + `{{scheme}}` + bt + `, ` + bt + `{{site}}` + bt + `, ` + bt + `{{branch}}` + bt + `, and ` + bt + `{{parent}}` + bt + ` placeholders or be plain strings. ` + bt + `APP_URL` + bt + ` here takes precedence over the default rewrite. ` + bt + `DB_DATABASE` + bt + ` on an isolated worktree is owned by the isolation flow and is not re-rendered until isolation is turned off. Not applied to the parent site's ` + bt + `.env` + bt + ` on ` + bt + `lerd setup` + bt + ` |
+| ` + bt + `env_overrides` + bt + ` | Map of env var names → templated values written into per-worktree ` + bt + `.env` + bt + ` (not the parent's; not applied on ` + bt + `lerd setup` + bt + `). Placeholders: ` + bt + `{{domain}}` + bt + `/` + bt + `{{scheme}}` + bt + `/` + bt + `{{site}}` + bt + `/` + bt + `{{branch}}` + bt + `/` + bt + `{{parent}}` + bt + `, or plain strings. ` + bt + `APP_URL` + bt + ` here beats the default rewrite. ` + bt + `DB_DATABASE` + bt + ` is owned by isolation when on |
 
 ### Custom container fields
 
