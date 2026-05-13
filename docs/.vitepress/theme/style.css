@@ -163,16 +163,4 @@
   border-color: #e02419 !important;
 }
 
-/* Home features: lock every card's details copy to exactly three lines
-   so the grid stays an even rectangle regardless of which descriptions
-   happened to be a few words longer. The actual text is also written
-   to render close to three lines, so the clamp only catches edge
-   cases (narrow viewports, larger system font sizes). */
-.VPFeatures.VPHomeFeatures .items .item .VPFeature .details {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
-  overflow: hidden;
-}
 
