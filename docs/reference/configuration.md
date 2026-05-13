@@ -17,7 +17,7 @@ dns:
 parked_directories:
   - ~/Lerd
 services:
-  mysql:       { enabled: true,  image: "docker.io/library/mysql:8.0",             port: 3306 }
+  mysql:       { enabled: true,  image: "docker.io/library/mysql:8.4",             port: 3306 }
   redis:       { enabled: true,  image: "docker.io/library/redis:7-alpine",        port: 6379 }
   postgres:    { enabled: false, image: "docker.io/postgis/postgis:16-3.5-alpine", port: 5432 }
   meilisearch: { enabled: false, image: "docker.io/getmeili/meilisearch:v1.7",     port: 7700 }
@@ -36,6 +36,14 @@ dumps:
                         # requires restarting the FPM container for the value to take
                         # effect (`systemctl --user restart lerd-php<ver>-fpm` or
                         # `lerd restart`).
+php:
+  ext_apk_deps:         # extra Alpine packages required at build time by
+                        # `lerd php:ext add <ext> --apk-deps <pkgs>` invocations.
+                        # Keyed by `<php_version>.<ext_name>`, value is a list
+                        # of apk package names. The PHP-FPM Containerfile reads
+                        # this block on rebuild so the extra build deps
+                        # reattach to the layer automatically (e.g.
+                        # `8.4.gd: [libwebp-dev, libpng-dev]`).
 ```
 
 ---
@@ -137,6 +145,8 @@ custom_workers:
 | `replaces_build` | no | `false` | While running, the worker provides the asset manifest so the static `npm run build` step is unnecessary. `lerd worktree add` skips its build prompt when an opted-in `replaces_build` worker is present |
 
 Worker definitions stay in `custom_workers` permanently. The `workers` field (a separate list of names) tracks which are currently active and is synced automatically by start/stop commands.
+
+Framework yamls (under `lerd-frameworks/frameworks/<framework>/<version>.yaml`) declare workers under a sibling `workers:` block with the same shape, so `host`, `per_worktree`, and `replaces_build` apply there too. The shipped Laravel 11 / 12 / 13 yamls use this for `vite` (`host: true`, `per_worktree: true`, `replaces_build: true`), and any custom framework can do the same to teach lerd about per-branch dev servers.
 
 ### Inline custom service definitions
 
