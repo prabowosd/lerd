@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import type { Site } from '$stores/sites';
   import {
     listAppLogFiles,
@@ -33,6 +33,7 @@
         selectedFile = list[0].name;
         await loadEntries();
       } else {
+        selectedFile = '';
         entries = [];
       }
     } finally {
@@ -52,8 +53,15 @@
     if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight;
   }
 
-  onMount(() => {
-    loadFiles();
+  // Re-fetch the file list whenever the active site or branch changes.
+  // Without this the dropdown sticks on the first mount's branch, so
+  // switching from parent to a worktree (or between worktrees) leaves a
+  // stale "No log entries found." state — the API was scoped to the
+  // wrong path, not actually empty.
+  $effect(() => {
+    site.domain;
+    branch;
+    untrack(() => loadFiles());
   });
 
   function toggleEntry(i: number) {
