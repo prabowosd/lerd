@@ -55,21 +55,21 @@ RUN apk update && apk add --no-cache \
         sysvshm \
         xsl \
     && (docker-php-ext-enable opcache || true) \
-    && { (pecl install redis && docker-php-ext-enable redis) \
+    && { (yes '' | pecl install redis && docker-php-ext-enable redis) \
          || (git clone --depth 1 https://github.com/phpredis/phpredis /tmp/phpredis \
              && cd /tmp/phpredis && phpize && ./configure && make -j$(nproc) && make install \
              && docker-php-ext-enable redis \
              && rm -rf /tmp/phpredis) \
          || true; } \
-    && { (pecl install imagick && docker-php-ext-enable imagick) \
+    && { (yes '' | pecl install imagick && docker-php-ext-enable imagick) \
          || (git clone --depth 1 https://github.com/Imagick/imagick /tmp/imagick \
              && cd /tmp/imagick && phpize && ./configure && make -j$(nproc) && make install \
              && docker-php-ext-enable imagick \
              && rm -rf /tmp/imagick) \
          || true; } \
-    && { (pecl install igbinary && docker-php-ext-enable igbinary) || true; } \
-    && { (pecl install mongodb && docker-php-ext-enable mongodb) || true; } \
-    && { (pecl install pcov && docker-php-ext-enable pcov) || true; } \
+    && { (yes '' | pecl install igbinary && docker-php-ext-enable igbinary) || true; } \
+    && { (yes '' | pecl install mongodb && docker-php-ext-enable mongodb) || true; } \
+    && { (yes '' | pecl install pcov && docker-php-ext-enable pcov) || true; } \
     && rm -rf /tmp/pear /var/cache/apk/*
 
 # Xdebug compiled in the builder too. Legacy PHP needs older xdebug majors.
@@ -79,7 +79,7 @@ RUN PHPVER="$(php -r 'echo PHP_MAJOR_VERSION,".",PHP_MINOR_VERSION;')" \
         8.0) XDEBUG_PKG="xdebug-3.3.2" ;; \
         *)   XDEBUG_PKG="xdebug" ;; \
     esac \
-    && pecl install "$XDEBUG_PKG" && docker-php-ext-enable xdebug \
+    && yes '' | pecl install "$XDEBUG_PKG" && docker-php-ext-enable xdebug \
     && rm -rf /tmp/pear /var/cache/apk/*
 
 # Project-defined custom extensions compile here while the toolchain
