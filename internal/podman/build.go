@@ -217,6 +217,7 @@ func baseContainerfileHash() (string, error) {
 		return "", err
 	}
 	base := strings.ReplaceAll(tmpl, "{{.CustomExtensions}}", "")
+	base = strings.ReplaceAll(base, "{{.CustomExtensionsRuntime}}", "")
 	base = strings.ReplaceAll(base, "{{.MkcertCA}}", "")
 	sum := sha256.Sum256([]byte(base))
 	return fmt.Sprintf("%x", sum)[:12], nil
@@ -304,6 +305,7 @@ func buildFPMImage(version string, force, local bool, customExts []string, extDe
 		}
 		containerfile = strings.ReplaceAll(tmpl, "{{.Version}}", version)
 		containerfile = strings.ReplaceAll(containerfile, "{{.CustomExtensions}}", buildCustomExtBlock(customExts, extDeps))
+		containerfile = strings.ReplaceAll(containerfile, "{{.CustomExtensionsRuntime}}", buildCustomExtRuntimeDeps(customExts, extDeps))
 		containerfile = strings.ReplaceAll(containerfile, "{{.MkcertCA}}", mkcertCABlock(tmp))
 		if force {
 			// Bypass layer cache so changes are fully applied. The old image stays
@@ -382,6 +384,27 @@ func apkDepsForExt(ext string, userDeps map[string][]string) []string {
 	add(extApkDeps[ext])
 	add(userDeps[ext])
 	return out
+}
+
+// buildCustomExtRuntimeDeps emits an apk RUN line that reinstalls the
+// builder-stage deps in the runtime stage so compiled .so files can
+// dlopen against those system libs. Empty when no custom exts have deps.
+func buildCustomExtRuntimeDeps(exts []string, userDeps map[string][]string) string {
+	seen := map[string]bool{}
+	var deps []string
+	for _, ext := range exts {
+		for _, pkg := range apkDepsForExt(ext, userDeps) {
+			if seen[pkg] {
+				continue
+			}
+			seen[pkg] = true
+			deps = append(deps, pkg)
+		}
+	}
+	if len(deps) == 0 {
+		return ""
+	}
+	return "RUN apk add --no-cache " + strings.Join(deps, " ") + " && rm -rf /var/cache/apk/*\n"
 }
 
 // buildCustomExtBlock generates Dockerfile RUN blocks for user-configured
@@ -591,6 +614,8 @@ func WriteFPMQuadlet(version string) error {
 	content = strings.ReplaceAll(content, "{{.UserIniPath}}", config.PHPUserIniFile(version))
 	content = strings.ReplaceAll(content, "{{.DumpsDir}}", config.DumpsAssetsDir())
 	content = strings.ReplaceAll(content, "{{.DumpsIniPath}}", config.DumpsIniFile())
+	content = strings.ReplaceAll(content, "{{.HostNameLine}}", hostNameLine())
+	content = applyShellMounts(content, short)
 	content = InjectExtraVolumes(content, ExtraVolumePaths())
 
 	// Skip the write and daemon-reload if the quadlet is already up to date.
@@ -634,6 +659,8 @@ func RewriteFPMQuadlets() error {
 		content = strings.ReplaceAll(content, "{{.UserIniPath}}", config.PHPUserIniFile(v))
 		content = strings.ReplaceAll(content, "{{.DumpsDir}}", config.DumpsAssetsDir())
 		content = strings.ReplaceAll(content, "{{.DumpsIniPath}}", config.DumpsIniFile())
+		content = strings.ReplaceAll(content, "{{.HostNameLine}}", hostNameLine())
+		content = applyShellMounts(content, short)
 		content = InjectExtraVolumes(content, extraPaths)
 
 		changed, writeErr := WriteQuadletDiff(unitName, content)
@@ -664,6 +691,45 @@ func RewriteFPMQuadlets() error {
 		_ = WriteContainerHosts()
 	}
 	return nil
+}
+
+// zshHistoryDir returns the per-PHP-version host directory that backs the
+// container's /root/.zsh_state mount, creating it so the bind mount succeeds
+// on first start. We deliberately do not mount any host shell config —
+// see internal/podman/quadlets/lerd-php-fpm.Containerfile for the rationale.
+func zshHistoryDir(versionShort string) string {
+	dir := filepath.Join(config.DataDir(), "shell-state", "php-"+versionShort, "zsh")
+	_ = os.MkdirAll(dir, 0o755)
+	return dir
+}
+
+// hostNameLine returns the `HostName=<host>` directive for the FPM quadlet so
+// prompts inside the container read e.g. "root@laptop" instead of the
+// auto-generated podman container id. Returns an empty string when the host
+// hostname can't be read or contains characters podman would reject, so the
+// placeholder line collapses cleanly.
+func hostNameLine() string {
+	h, err := os.Hostname()
+	if err != nil {
+		return ""
+	}
+	h = strings.TrimSpace(h)
+	if h == "" {
+		return ""
+	}
+	for _, r := range h {
+		ok := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '-' || r == '.'
+		if !ok {
+			return ""
+		}
+	}
+	return "HostName=" + h
+}
+
+// applyShellMounts substitutes shell-related template fields.
+func applyShellMounts(content, versionShort string) string {
+	return strings.ReplaceAll(content, "{{.ZshHistoryDir}}", zshHistoryDir(versionShort))
 }
 
 // listInstalledPHPVersions returns PHP versions that have a quadlet installed.
