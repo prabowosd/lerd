@@ -1,9 +1,14 @@
 package cli
 
 import (
+	"net"
+	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/geodro/lerd/internal/config"
 	"github.com/geodro/lerd/internal/podman"
@@ -78,6 +83,72 @@ func TestRunDumpToggle_OffRoundTrip(t *testing.T) {
 	cfg, _ := config.LoadGlobal()
 	if cfg.IsDumpsEnabled() {
 		t.Errorf("Dumps.Enabled still true after off")
+	}
+}
+
+// fakeUISocket binds a HTTP server on config.UISocketPath() and records
+// every path it receives. Returns a pointer the test can check.
+func fakeUISocket(t *testing.T) *atomic.Pointer[string] {
+	t.Helper()
+	sockPath := config.UISocketPath()
+	if err := os.MkdirAll(filepath.Dir(sockPath), 0755); err != nil {
+		t.Fatalf("mkdir run dir: %v", err)
+	}
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("listen unix: %v", err)
+	}
+	var seen atomic.Pointer[string]
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		seen.Store(&p)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := &http.Server{Handler: mux}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close(); _ = ln.Close() })
+	return &seen
+}
+
+func TestRunDumpToggle_PingsUIAfterChange(t *testing.T) {
+	withTempXDG(t)
+	stubPodman(t)
+	seen := fakeUISocket(t)
+
+	if err := runDumpToggle(true); err != nil {
+		t.Fatalf("runDumpToggle: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if p := seen.Load(); p != nil && *p == "/api/dumps/notify-changed" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	got := seen.Load()
+	gotStr := "<nil>"
+	if got != nil {
+		gotStr = *got
+	}
+	t.Fatalf("did not see notify-changed ping on UI socket, last path=%s", gotStr)
+}
+
+func TestRunDumpToggle_NoPingWhenNoChange(t *testing.T) {
+	withTempXDG(t)
+	stubPodman(t)
+	// Enable once (will ping).
+	_ = runDumpToggle(true)
+
+	seen := fakeUISocket(t)
+	// Calling on() again is NoChange; no ping should fire.
+	if err := runDumpToggle(true); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if p := seen.Load(); p != nil {
+		t.Errorf("expected no ping on no-change toggle, got %q", *p)
 	}
 }
 
