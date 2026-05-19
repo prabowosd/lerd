@@ -394,8 +394,11 @@ func TestAddShellShims_NodeShimChecksDefaultAlias(t *testing.T) {
 		t.Fatalf("npm shim not created: %v", err)
 	}
 	shim := string(data)
+	if !strings.Contains(shim, `exec "$LERD" npm "$@"`) {
+		t.Errorf("npm shim should delegate to lerd binary first, got:\n%s", shim)
+	}
 	if !strings.Contains(shim, `"$FNM" exec --using=default -- true`) {
-		t.Errorf("npm shim should probe the default alias before exec, got:\n%s", shim)
+		t.Errorf("npm shim should probe the default alias in the fallback path, got:\n%s", shim)
 	}
 	if !strings.Contains(shim, "No Node.js version available via lerd") {
 		t.Errorf("npm shim should print friendly fallback hint, got:\n%s", shim)

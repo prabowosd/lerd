@@ -44,6 +44,21 @@ func BinDir() string {
 	return filepath.Join(DataDir(), "bin")
 }
 
+// NodeGlobalDir is the npm prefix lerd points its node shim at, so
+// `npm install -g foo` lands in a stable per-user path instead of a
+// version-specific fnm directory that nothing has on PATH.
+func NodeGlobalDir() string {
+	return filepath.Join(DataDir(), "node-global")
+}
+
+// UserLocalBin is where lerd publishes wrapper scripts for npm globals so
+// they're callable from the host shell. It's the same directory lerd
+// installs itself into, so PATH coverage is already a given.
+func UserLocalBin() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "bin")
+}
+
 // NginxDir returns the nginx data directory.
 func NginxDir() string {
 	return filepath.Join(DataDir(), "nginx")
