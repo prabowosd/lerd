@@ -355,48 +355,92 @@ func TestRemoteControlGate_unixSocketTreatedAsLoopback(t *testing.T) {
 func TestRemoteControlGate_mailpitWebhookHostAllowedLanBlocked(t *testing.T) {
 	setupConfigDirRaw(t, "", "", false) // LAN off, no creds, default state
 
-	next := &nextHandler{}
-	gate := withRemoteControlGate(next)
-
 	addrs, err := net.InterfaceAddrs()
 	if err != nil || len(addrs) == 0 {
 		t.Skip("no interface addresses available")
 	}
-	var hostIP string
+	var v4, v6 string
 	for _, a := range addrs {
 		ipNet, ok := a.(*net.IPNet)
 		if !ok || ipNet.IP == nil || ipNet.IP.IsLoopback() {
 			continue
 		}
-		// Prefer IPv4 to avoid IPv6 link-local zone-suffix complications
-		// that differ between Linux and macOS test runners.
-		if ipNet.IP.To4() != nil {
-			hostIP = ipNet.IP.String()
-			break
+		if ipNet.IP.To4() != nil && v4 == "" {
+			v4 = ipNet.IP.String()
+		} else if ipNet.IP.To4() == nil && v6 == "" {
+			v6 = ipNet.IP.String()
 		}
 	}
-	if hostIP == "" {
-		t.Skip("no non-loopback IPv4 host interface to probe")
+
+	allowCases := []struct{ name, ip string }{}
+	if v4 != "" {
+		allowCases = append(allowCases, struct{ name, ip string }{"v4", v4})
+	}
+	if v6 != "" {
+		allowCases = append(allowCases, struct{ name, ip string }{"v6", v6})
+	}
+	if len(allowCases) == 0 {
+		t.Skip("no non-loopback host interfaces to probe")
+	}
+	for _, c := range allowCases {
+		t.Run("allow_"+c.name, func(t *testing.T) {
+			next := &nextHandler{}
+			gate := withRemoteControlGate(next)
+			req := httptest.NewRequest(http.MethodPost, "/api/webhooks/mailpit", nil)
+			req.RemoteAddr = net.JoinHostPort(c.ip, "34567")
+			rec := httptest.NewRecorder()
+			gate.ServeHTTP(rec, req)
+			if !next.called {
+				t.Errorf("mailpit webhook from host IP %s blocked, status=%d", c.ip, rec.Code)
+			}
+		})
 	}
 
+	denyCases := []struct{ name, ip string }{
+		{"v4_lan", "198.51.100.42"},
+		{"v6_documentation", "2001:db8::1"},
+	}
+	for _, c := range denyCases {
+		t.Run("deny_"+c.name, func(t *testing.T) {
+			next := &nextHandler{}
+			gate := withRemoteControlGate(next)
+			req := httptest.NewRequest(http.MethodPost, "/api/webhooks/mailpit", nil)
+			req.RemoteAddr = net.JoinHostPort(c.ip, "34567")
+			rec := httptest.NewRecorder()
+			gate.ServeHTTP(rec, req)
+			if next.called {
+				t.Errorf("mailpit webhook from non-host %s reached handler, want 403", c.ip)
+			}
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("status = %d, want 403", rec.Code)
+			}
+		})
+	}
+}
+
+// fromHost must compare by IP value so an IPv6 source carrying a zone
+// suffix (fe80::1%eth0) still matches the zoneless interface address.
+func TestFromHost_acceptsZonedIPv6Source(t *testing.T) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Skip("no interface addresses available")
+	}
+	var v6 string
+	for _, a := range addrs {
+		ipNet, ok := a.(*net.IPNet)
+		if !ok || ipNet.IP == nil || ipNet.IP.To4() != nil {
+			continue
+		}
+		v6 = ipNet.IP.String()
+		break
+	}
+	if v6 == "" {
+		t.Skip("no IPv6 interface address to probe")
+	}
 	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/mailpit", nil)
-	req.RemoteAddr = net.JoinHostPort(hostIP, "34567")
-	rec := httptest.NewRecorder()
-	gate.ServeHTTP(rec, req)
-	if !next.called {
-		t.Errorf("mailpit webhook from host IP %s blocked, status=%d", hostIP, rec.Code)
-	}
-
-	next.called = false
-	req2 := httptest.NewRequest(http.MethodPost, "/api/webhooks/mailpit", nil)
-	req2.RemoteAddr = net.JoinHostPort("198.51.100.42", "34567")
-	rec2 := httptest.NewRecorder()
-	gate.ServeHTTP(rec2, req2)
-	if next.called {
-		t.Error("mailpit webhook from LAN reached handler — should 403")
-	}
-	if rec2.Code != http.StatusForbidden {
-		t.Errorf("LAN mailpit status = %d, want 403", rec2.Code)
+	req.RemoteAddr = "[" + v6 + "%eth0]:34567"
+	if !fromHost(req) {
+		t.Errorf("fromHost rejected zoned IPv6 source %s%%eth0", v6)
 	}
 }
 

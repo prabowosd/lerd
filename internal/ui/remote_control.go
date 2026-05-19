@@ -55,6 +55,15 @@ func fromHost(r *http.Request) bool {
 	if err != nil {
 		host = r.RemoteAddr
 	}
+	// IPv6 link-local sources may carry a zone suffix (fe80::1%eth0);
+	// strip it before parsing so the value compare below works.
+	if i := strings.Index(host, "%"); i != -1 {
+		host = host[:i]
+	}
+	src := net.ParseIP(host)
+	if src == nil {
+		return false
+	}
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
 		return false
@@ -64,7 +73,7 @@ func fromHost(r *http.Request) bool {
 		if !ok || ipNet.IP == nil {
 			continue
 		}
-		if ipNet.IP.String() == host {
+		if src.Equal(ipNet.IP) {
 			return true
 		}
 	}
