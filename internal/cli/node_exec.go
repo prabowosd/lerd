@@ -99,7 +99,7 @@ func runWithFnm(bin string, args []string) error {
 		// Sync wrappers regardless of exit status: an `npm uninstall -g` that
 		// fails partway can still have removed a bin we want to mirror out of
 		// ~/.local/bin/.
-		if syncErr := syncNodeGlobalBins(filepath.Join(prefix, "bin"), config.UserLocalBin(), fnm); syncErr != nil {
+		if syncErr := syncNodeGlobalBins(filepath.Join(prefix, "bin"), config.BinDir(), fnm); syncErr != nil {
 			fmt.Fprintf(os.Stderr, "lerd: warning: failed to sync npm global wrappers: %v\n", syncErr)
 		}
 	}
