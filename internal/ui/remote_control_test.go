@@ -375,6 +375,11 @@ func TestRemoteControlGate_mailpitWebhookHostAllowedLanBlocked(t *testing.T) {
 	allowCases := []struct{ name, ip string }{}
 	if v4 != "" {
 		allowCases = append(allowCases, struct{ name, ip string }{"v4", v4})
+		// A v6-only client that connects to a v4 listener arrives with the
+		// v4-mapped form (::ffff:HOSTV4). fromHost relies on IP.Equal to
+		// normalise across both shapes; pin it here so a future readers
+		// don't reintroduce a string compare and break this path.
+		allowCases = append(allowCases, struct{ name, ip string }{"v4_mapped_v6", "::ffff:" + v4})
 	}
 	if v6 != "" {
 		allowCases = append(allowCases, struct{ name, ip string }{"v6", v6})
