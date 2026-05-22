@@ -27,6 +27,7 @@ RUN apk update && apk add --no-cache \
         openldap-dev \
         sqlite-dev \
         libxslt-dev \
+        zlib-dev \
     && PHP_ID="$(php -r 'echo PHP_VERSION_ID;')" \
     && if [ "$PHP_ID" -lt 70400 ]; then \
            docker-php-ext-configure gd --with-freetype-dir=/usr --with-jpeg-dir=/usr --with-png-dir=/usr --with-webp-dir=/usr; \
@@ -75,7 +76,11 @@ RUN apk update && apk add --no-cache \
     && { (yes '' | pecl install igbinary && docker-php-ext-enable igbinary) || true; } \
     && { (yes '' | pecl install mongodb && docker-php-ext-enable mongodb) || true; } \
     && { (yes '' | pecl install pcov && docker-php-ext-enable pcov) || true; } \
-    && rm -rf /tmp/pear /var/cache/apk/*
+    && { (git clone --depth 1 --branch release/latest https://github.com/NoiseByNorthwest/php-spx /tmp/php-spx \
+          && cd /tmp/php-spx && phpize && ./configure && make -j$(nproc) && make install \
+          && docker-php-ext-enable spx) || true; } \
+    && mkdir -p /usr/local/share/misc/php-spx/assets/web-ui \
+    && rm -rf /tmp/php-spx /tmp/pear /var/cache/apk/*
 
 # Xdebug compiled in the builder too. Legacy PHP needs older xdebug majors.
 RUN PHPVER="$(php -r 'echo PHP_MAJOR_VERSION,".",PHP_MINOR_VERSION;')" \
@@ -135,6 +140,10 @@ RUN apk add --no-cache icu-data-full 2>/dev/null || true
 # plus xdebug + pecl modules without dragging autoconf/make/g++ across.
 COPY --from=builder /usr/local/lib/php/extensions/ /usr/local/lib/php/extensions/
 COPY --from=builder /usr/local/etc/php/conf.d/ /usr/local/etc/php/conf.d/
+
+# SPX profiler web UI assets (shipped as files, not embedded in the .so). The
+# builder's mkdir -p guarantees this path exists even if the SPX build failed.
+COPY --from=builder /usr/local/share/misc/php-spx/ /usr/local/share/misc/php-spx/
 
 # MariaDB client (mysql-client) connecting to lerd MySQL uses self-signed
 # certs; disable SSL verification so CLI tools (mysqldump, schema loading)

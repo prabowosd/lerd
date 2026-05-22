@@ -214,6 +214,10 @@ func Start(currentVersion string) error {
 	mux.HandleFunc("/api/dumps/toggle", withCORS(publishAfter(handleDumpsToggle, eventbus.KindDumpsStatus)))
 	mux.HandleFunc("/api/dumps/passthrough", withCORS(publishAfter(handleDumpsPassthrough, eventbus.KindDumpsStatus)))
 	mux.HandleFunc("/api/dumps/notify-changed", withCORS(handleDumpsNotifyChanged))
+	mux.HandleFunc("/api/profiler/toggle", withCORS(publishAfter(handleProfilerToggle, eventbus.KindProfilerStatus)))
+	mux.HandleFunc("/api/profiler/status", withCORS(handleProfilerStatus))
+	mux.HandleFunc("/api/profiler/clear", withCORS(handleProfilerClear))
+	mux.HandleFunc("/_spx/", handleSpxProxy)
 	mux.HandleFunc("/api/queue/", withCORS(handleQueueLogs))
 	mux.HandleFunc("/api/horizon/", withCORS(handleHorizonLogs))
 	mux.HandleFunc("/api/stripe/", withCORS(handleStripeLogs))
@@ -537,6 +541,8 @@ type StatusResponse struct {
 
 type DNSStatus struct {
 	OK      bool   `json:"ok"`
+	Status  string `json:"status"` // ok | degraded | down
+	VPN     bool   `json:"vpn"`    // a VPN tunnel is up; degraded is then expected
 	Enabled bool   `json:"enabled"`
 	TLD     string `json:"tld"`
 }
@@ -566,7 +572,7 @@ func buildStatus() StatusResponse {
 		dnsEnabled = cfg.DNS.Enabled
 	}
 
-	dnsOK, _ := dns.Check(tld)
+	dnsStatus := dns.CheckStatus(tld)
 	nginxRunning := podman.Cache.Running("lerd-nginx")
 	watcherRunning := services.Mgr.IsActive("lerd-watcher")
 
@@ -592,7 +598,7 @@ func buildStatus() StatusResponse {
 	_, nodeShimErr := os.Stat(nodeShim)
 	nodeManagedByLerd := nodeShimErr == nil
 	return StatusResponse{
-		DNS:               DNSStatus{OK: dnsOK, Enabled: dnsEnabled, TLD: tld},
+		DNS:               DNSStatus{OK: dnsStatus == dns.StatusOK, Status: string(dnsStatus), VPN: dns.VPNActive(), Enabled: dnsEnabled, TLD: tld},
 		Nginx:             ServiceCheck{Running: nginxRunning},
 		PHPFPMs:           phpStatuses,
 		PHPDefault:        phpDefault,
@@ -1189,7 +1195,8 @@ func handleServicePresets(w http.ResponseWriter, r *http.Request) {
 		}
 		// For single-version presets installed reflects "is the canonical
 		// service installed". For multi-version presets it reflects "are any
-		// version-suffixed instances installed", and InstalledTags lists them.
+		// instances installed" (canonical at the bare preset name OR alternates
+		// at the suffixed name), and InstalledTags lists them.
 		installed := false
 		var installedTags []string
 		if len(p.Versions) == 0 {
@@ -1198,8 +1205,7 @@ func handleServicePresets(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			for _, v := range p.Versions {
-				name := p.Name + "-" + config.SanitizeImageTag(v.Tag)
-				if _, err := config.LoadCustomService(name); err == nil {
+				if _, err := config.LoadCustomService(config.PresetVersionServiceName(p.Name, v)); err == nil {
 					installed = true
 					installedTags = append(installedTags, v.Tag)
 				}
@@ -1345,9 +1351,10 @@ func handleServiceAction(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "could not resolve current image", http.StatusBadRequest)
 			return
 		}
-		targetImage := avail.CurrentImage
-		if at := strings.LastIndex(targetImage, ":"); at > 0 {
-			targetImage = targetImage[:at] + ":" + targetTag
+		targetImage, err := serviceops.ResolveMigrateTarget(name, avail.CurrentImage, targetTag)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 		writeLine, _ := startNDJSONStream(w, r)
 		start := time.Now()
@@ -3033,7 +3040,7 @@ func handleLerdUpdateTerminal(w http.ResponseWriter, r *http.Request) {
 // Extracted so tests can pin the absolute-path quoting without launching
 // a real terminal emulator.
 func buildUpdateScript(executable string) string {
-	return shQuote(executable) + ` update; echo; read -rp "Press Enter to close..."`
+	return podman.ShellQuote(executable) + ` update; echo; read -rp "Press Enter to close..."`
 }
 
 // openTerminalCommand opens the user's terminal emulator and runs the given
@@ -3045,7 +3052,7 @@ func openTerminalCommand(script string) error {
 		bin  string
 		args []string
 	}
-	combined := "sh -c " + shQuote(script)
+	combined := "sh -c " + podman.ShellQuote(script)
 	candidates := []termCmd{
 		{"kitty", []string{"sh", "-c", script}},
 		{"foot", []string{"sh", "-c", script}},
@@ -3085,12 +3092,6 @@ func openTerminalCommand(script string) error {
 		return nil
 	}
 	return fmt.Errorf("no terminal emulator found; set $TERMINAL or install kitty, foot, alacritty, wezterm, ghostty, ptyxis, konsole, or gnome-terminal")
-}
-
-// shQuote wraps s in single quotes, escaping any embedded single quotes
-// using the standard '\" dance so the result is safe for /bin/sh -c.
-func shQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // appleScriptStr returns an AppleScript string expression for s.

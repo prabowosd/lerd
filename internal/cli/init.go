@@ -51,6 +51,7 @@ func runInit(fresh bool) error {
 		if err != nil {
 			return err
 		}
+		existing = applyImportSeed(cwd, existing)
 		cfg, err := runWizard(cwd, existing)
 		if err != nil {
 			return err
@@ -668,11 +669,8 @@ var dbFamilies = map[string]bool{
 // database. Honours the explicit Family field first, then falls back to
 // pattern inference for legacy installs that pre-date the field.
 func dbFamilyOf(svc *config.CustomService) string {
-	if svc.Family != "" && dbFamilies[svc.Family] {
-		return svc.Family
-	}
-	if inferred := config.InferFamily(svc.Name); dbFamilies[inferred] {
-		return inferred
+	if family := config.FamilyOf(svc); dbFamilies[family] {
+		return family
 	}
 	return ""
 }
@@ -691,8 +689,8 @@ var dbFamilyLabels = map[string]string{
 func formatDBOptionLabel(name string) string {
 	family := name
 	version := ""
-	if config.InferFamily(name) != "" {
-		family = config.InferFamily(name)
+	if inferred := config.FamilyOfName(name); inferred != "" {
+		family = inferred
 		if rest := strings.TrimPrefix(name, family); rest != "" && rest != name {
 			version = strings.TrimPrefix(rest, "-")
 			version = strings.ReplaceAll(version, "-", ".")
@@ -915,6 +913,7 @@ func runSetupInit(cwd string, skipWizard bool) error {
 
 	if !hasExisting {
 		existing, _ := config.LoadProjectConfig(cwd)
+		existing = applyImportSeed(cwd, existing)
 		cfg, err := runWizard(cwd, existing)
 		if err != nil {
 			return err
