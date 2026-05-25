@@ -23,8 +23,14 @@ func TestLinkChanges_realKernel(t *testing.T) {
 
 	out := make(chan struct{}, 16)
 	done := make(chan struct{})
-	go LinkChanges(out, done)
-	defer close(done)
+	errCh := make(chan error, 1)
+	go func() { errCh <- LinkChanges(out, done) }()
+	defer func() {
+		close(done)
+		if err := <-errCh; err != nil {
+			t.Errorf("LinkChanges returned %v after clean shutdown, want nil", err)
+		}
+	}()
 
 	time.Sleep(150 * time.Millisecond)
 	drain(out)

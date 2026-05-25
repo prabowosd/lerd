@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -85,7 +86,11 @@ func runDNSStatusWatcher() {
 	done := make(chan struct{})
 	linkRaw := make(chan struct{}, 32)
 	linkSettled := make(chan struct{}, 4)
-	go dns.LinkChanges(linkRaw, done)
+	go func() {
+		if err := dns.LinkChanges(linkRaw, done); err != nil {
+			fmt.Printf("[WARN] rtnetlink unavailable, DNS reacts on the safety-net poll only: %v\n", err)
+		}
+	}()
 	go dns.DebounceEvents(linkRaw, linkSettled, linkStatusDebounce, done)
 
 	ticker := time.NewTicker(dnsStatusWatchInterval)

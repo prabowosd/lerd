@@ -127,7 +127,11 @@ func WatchDNS(interval time.Duration, tld string) {
 
 	linkRaw := make(chan struct{}, 32)
 	linkSettled := make(chan struct{}, 4)
-	go dns.LinkChanges(linkRaw, done)
+	go func() {
+		if err := dns.LinkChanges(linkRaw, done); err != nil {
+			logger.Warn("rtnetlink unavailable, DNS reacts on the safety-net poll only", "err", err)
+		}
+	}()
 	go dns.DebounceEvents(linkRaw, linkSettled, linkChangeDebounce, done)
 
 	runDNSLoop(deps, state, tld, ticker.C, linkSettled, done)

@@ -2,6 +2,7 @@ package dns
 
 import (
 	"errors"
+	"fmt"
 
 	"golang.org/x/sys/unix"
 )
@@ -18,15 +19,16 @@ const linkChangeGroups = unix.RTMGRP_LINK |
 // struct{} on out every time the kernel reports a link or address state
 // change. Message contents are intentionally discarded: callers
 // re-fingerprint the host DNS environment on each settled event, so we
-// only need the "something moved" signal. Returns on done close, or
-// silently on socket open / bind failure so the caller falls back to
-// time-based polling without a hard error.
-func LinkChanges(out chan<- struct{}, done <-chan struct{}) {
+// only need the "something moved" signal. Returns nil after done closes,
+// or a non-nil error if the netlink socket can't be opened or bound so
+// the caller can log a one-shot warning before falling back to its
+// time-based poll.
+func LinkChanges(out chan<- struct{}, done <-chan struct{}) error {
 	fd, err := unix.Socket(unix.AF_NETLINK,
 		unix.SOCK_RAW|unix.SOCK_CLOEXEC|unix.SOCK_NONBLOCK,
 		unix.NETLINK_ROUTE)
 	if err != nil {
-		return
+		return fmt.Errorf("rtnetlink socket: %w", err)
 	}
 	defer unix.Close(fd)
 
@@ -34,7 +36,7 @@ func LinkChanges(out chan<- struct{}, done <-chan struct{}) {
 		Family: unix.AF_NETLINK,
 		Groups: linkChangeGroups,
 	}); err != nil {
-		return
+		return fmt.Errorf("rtnetlink bind: %w", err)
 	}
 
 	go func() {
@@ -48,14 +50,14 @@ func LinkChanges(out chan<- struct{}, done <-chan struct{}) {
 		if err != nil {
 			if errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EWOULDBLOCK) {
 				if waitErr := waitReadable(fd, done); waitErr != nil {
-					return
+					return nil
 				}
 				continue
 			}
-			return
+			return nil
 		}
 		if n <= 0 {
-			return
+			return nil
 		}
 		select {
 		case out <- struct{}{}:
