@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sync"
 	"syscall"
 	"time"
 
@@ -68,20 +67,19 @@ type serviceInfo struct {
 const daemonEnv = "LERD_TRAY_DAEMON"
 
 // lerdBin resolves the absolute path to the `lerd` binary. The tray often
-// runs under launchd, whose environment has no PATH that points at Homebrew
-// (`/opt/homebrew/bin`) where `lerd` lives, so a bare `exec.Command("lerd", …)`
-// silently fails to start. Falls back to "lerd" when nothing resolves so the
-// shell-launched path keeps working.
-var lerdBin = sync.OnceValue(func() string {
+// runs under launchd, whose environment has no PATH covering Homebrew or
+// ~/.local/bin, so a bare `exec.Command("lerd", …)` silently fails. Resolved
+// on every call so reinstalls (Homebrew → ~/.local/bin, etc.) don't strand
+// a long-running tray on a stale cached path.
+func lerdBin() string {
 	if p, err := exec.LookPath("lerd"); err == nil {
 		return p
 	}
-	home, _ := os.UserHomeDir()
 	candidates := []string{
 		"/opt/homebrew/bin/lerd",
 		"/usr/local/bin/lerd",
 	}
-	if home != "" {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		candidates = append(candidates, filepath.Join(home, ".local", "bin", "lerd"))
 	}
 	for _, c := range candidates {
@@ -90,7 +88,7 @@ var lerdBin = sync.OnceValue(func() string {
 		}
 	}
 	return "lerd"
-})
+}
 
 // lerdCmd is a thin wrapper around exec.Command that uses the resolved
 // `lerd` binary path so handlers work under launchd's empty PATH.

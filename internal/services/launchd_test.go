@@ -282,6 +282,30 @@ func TestPlistLabel(t *testing.T) {
 	}
 }
 
+func TestParseServiceUnitRestartPolicy(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want keepAlivePolicy
+	}{
+		{"always", "[Service]\nExecStart=/bin/sh\nRestart=always\n", keepAliveAlways},
+		{"on-failure", "[Service]\nExecStart=/bin/sh\nRestart=on-failure\n", keepAliveOnFailure},
+		{"none", "[Service]\nExecStart=/bin/sh\n", keepAliveNever},
+		{"no", "[Service]\nExecStart=/bin/sh\nRestart=no\n", keepAliveNever},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, got, err := parseServiceUnit("lerd-test", tc.body)
+			if err != nil {
+				t.Fatalf("parseServiceUnit: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("Restart=%q → policy %v, want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestWriteAndRemoveServiceUnit(t *testing.T) {
 	tmp := t.TempDir()
 	origHome := os.Getenv("HOME")
