@@ -91,7 +91,7 @@ func TestXmlEscStr(t *testing.T) {
 }
 
 func TestBuildPlist(t *testing.T) {
-	plist := buildPlist("com.lerd.test", []string{"/bin/sh", "--flag"}, true, true, "/tmp/out.log", "/tmp/err.log")
+	plist := buildPlist("com.lerd.test", []string{"/bin/sh", "--flag"}, true, keepAliveAlways, "/tmp/out.log", "/tmp/err.log")
 
 	checks := []string{
 		`<string>com.lerd.test</string>`,
@@ -115,7 +115,7 @@ func TestBuildPlist(t *testing.T) {
 }
 
 func TestBuildPlistNoOptionalFields(t *testing.T) {
-	plist := buildPlist("com.lerd.minimal", []string{"/bin/true"}, false, false, "", "")
+	plist := buildPlist("com.lerd.minimal", []string{"/bin/true"}, false, keepAliveNever, "", "")
 
 	if strings.Contains(plist, "RunAtLoad") {
 		t.Error("expected no RunAtLoad key")
@@ -128,8 +128,22 @@ func TestBuildPlistNoOptionalFields(t *testing.T) {
 	}
 }
 
+func TestBuildPlistOnFailureEmitsSuccessfulExitDict(t *testing.T) {
+	plist := buildPlist("com.lerd.onfail", []string{"/bin/true"}, false, keepAliveOnFailure, "", "")
+
+	if !strings.Contains(plist, "<key>KeepAlive</key>") {
+		t.Fatal("expected KeepAlive key")
+	}
+	if !strings.Contains(plist, "<key>SuccessfulExit</key>") || !strings.Contains(plist, "<false/>") {
+		t.Errorf("on-failure policy should emit KeepAlive: SuccessfulExit=false, got:\n%s", plist)
+	}
+	if strings.Contains(plist, "<key>KeepAlive</key>\n\t<true/>") {
+		t.Errorf("on-failure must not emit bare KeepAlive=true, got:\n%s", plist)
+	}
+}
+
 func TestBuildPlistXMLEscaping(t *testing.T) {
-	plist := buildPlist("com.lerd.esc", []string{"/bin/echo", "a<b>&c"}, false, false, "", "")
+	plist := buildPlist("com.lerd.esc", []string{"/bin/echo", "a<b>&c"}, false, keepAliveNever, "", "")
 	if !strings.Contains(plist, "a&lt;b&gt;&amp;c") {
 		t.Error("arguments should be XML-escaped in plist")
 	}
