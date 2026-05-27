@@ -2611,14 +2611,62 @@ func handleSiteAction(w http.ResponseWriter, r *http.Request) {
 }
 
 func handlePHPVersionAction(w http.ResponseWriter, r *http.Request) {
-	// path: /api/php-versions/{version}/{remove|set-default}
+	// path: /api/php-versions/{version}/{remove|set-default|config}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/php-versions/"), "/")
-	if len(parts) != 2 || r.Method != http.MethodPost {
+	if len(parts) != 2 {
 		http.NotFound(w, r)
 		return
 	}
 	version, action := parts[0], parts[1]
 	if !validVersion.MatchString(version) {
+		http.NotFound(w, r)
+		return
+	}
+
+	// User php.ini override: GET reads the per-version 98-user.ini (seeding it
+	// on first access), POST saves it and restarts the FPM container so it
+	// re-reads the config. Mirrors the `lerd php:ini` CLI command.
+	if action == "config" && (r.Method == http.MethodGet || r.Method == http.MethodPost) {
+		if err := podman.EnsureUserIni(version); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		path := config.PHPUserIniFile(version)
+		if r.Method == http.MethodGet {
+			body, err := os.ReadFile(path)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, map[string]any{"path": path, "content": string(body)})
+			return
+		}
+		var req struct {
+			Content string `json:"content"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if err := os.WriteFile(path, []byte(req.Content), 0644); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// Ensure the quadlet carries the user-ini mount (may be absent on
+		// installs predating the feature), then restart so it takes effect.
+		if err := podman.WriteFPMQuadlet(version); err != nil {
+			fmt.Fprintf(os.Stderr, "[WARN] updating php quadlet for %s failed: %v\n", version, err)
+		}
+		short := strings.ReplaceAll(version, ".", "")
+		if err := podman.RestartUnit("lerd-php" + short + "-fpm"); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true})
+		return
+	}
+
+	if r.Method != http.MethodPost {
 		http.NotFound(w, r)
 		return
 	}
