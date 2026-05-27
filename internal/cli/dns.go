@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -98,6 +99,11 @@ func EnableLANExposure(progress LANProgressFunc) (lanIP string, err error) {
 
 		emit("Restarting lerd-dns")
 		if err := reloadAndRestartUnit("lerd-dns"); err != nil {
+			return "", err
+		}
+
+		emit("Pre-flight: checking " + lanIP + ":5300 is free")
+		if err := preflightForwarderPort(lanIP); err != nil {
 			return "", err
 		}
 
@@ -215,6 +221,70 @@ func regenerateLANContainerQuadlets(progress LANProgressFunc) error {
 		_ = services.Mgr.Restart(name)
 	}
 	return nil
+}
+
+// Seams for preflightForwarderPort so the logic can be unit-tested
+// without binding real ports, spawning lsof, or depending on services.Mgr.
+var (
+	forwarderUnitStatusFn = func() string {
+		s, _ := services.Mgr.UnitStatus("lerd-dns-forwarder")
+		return s
+	}
+	forwarderPortFreeFn   = forwarderPortFree
+	forwarderPortHolderFn = forwarderPortHolderLsof
+)
+
+// preflightForwarderPort refuses to install the LAN DNS forwarder when
+// something else (typically a legacy host-side dnsmasq) already owns
+// lanIP:5300. Without this check the launchd plist would write fine,
+// then the daemon would race against the existing holder on every boot.
+// Skipped when our own forwarder is already active: that's the
+// re-run-of-lan-expose case where the existing unit will be replaced.
+func preflightForwarderPort(lanIP string) error {
+	if s := forwarderUnitStatusFn(); s == "active" || s == "activating" {
+		return nil
+	}
+	if forwarderPortFreeFn(lanIP) {
+		return nil
+	}
+	holder := forwarderPortHolderFn(lanIP)
+	return fmt.Errorf("%s:5300 is already in use; lerd cannot install the LAN DNS forwarder.\n%s\nStop the conflicting service (or rebind it off port 5300) and re-run `lerd lan expose`", lanIP, holder)
+}
+
+// forwarderPortFree returns true when both UDP and TCP on lanIP:5300 are
+// free to bind. Best-effort: a transient bind in a SO_REUSEPORT-friendly
+// process can still slip through, but covers the common case of a
+// long-running dnsmasq holding the address.
+func forwarderPortFree(lanIP string) bool {
+	addr := lanIP + ":5300"
+	if conn, err := net.ListenPacket("udp", addr); err == nil {
+		conn.Close()
+	} else {
+		return false
+	}
+	if l, err := net.Listen("tcp", addr); err == nil {
+		l.Close()
+	} else {
+		return false
+	}
+	return true
+}
+
+// forwarderPortHolderLsof shells out to lsof to identify the conflicting
+// process. Works on both macOS and Linux. Returns a fallback hint when
+// lsof isn't present or returns nothing.
+func forwarderPortHolderLsof(lanIP string) string {
+	cmd := exec.Command("lsof", "-nP", "-iUDP@"+lanIP+":5300", "-iTCP@"+lanIP+":5300")
+	out, err := cmd.CombinedOutput()
+	trimmed := strings.TrimSpace(string(out))
+	if err != nil || trimmed == "" {
+		return "  (could not identify the holder; try: sudo lsof -nP -i :5300)"
+	}
+	var lines []string
+	for _, line := range strings.Split(trimmed, "\n") {
+		lines = append(lines, "  "+line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // installDNSForwarderUnit writes the user service that runs the
