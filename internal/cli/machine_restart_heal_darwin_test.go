@@ -10,10 +10,10 @@ import (
 
 func TestShouldHealAfterMachineStart(t *testing.T) {
 	cases := []struct {
-		name           string
+		name            string
 		preEnsureLastUp string
 		priorBaseline   string
-		want           bool
+		want            bool
 	}{
 		{"first run, no baseline yet", "2026-05-27T12:00:00Z", "", false},
 		{"first run, machine was down", "", "", false},
