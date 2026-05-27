@@ -69,6 +69,81 @@ func TestReinstallService_PreflightPullFailure_LeavesYAMLIntact(t *testing.T) {
 	}
 }
 
+func TestReinstallService_SuppressesFamilyRegenDuringRemove(t *testing.T) {
+	// The regen-during-remove was racing with the post-install regen
+	// (rendering a plist without the service being reinstalled, then
+	// restarting consumers against the partial plist). Reinstall must
+	// pass SkipFamilyRegen so the install's own regen does the work
+	// once, after the new YAML is on disk.
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+	stubPodmanRemove(t)
+	stubReinstallSeams(t)
+
+	regenCalls := 0
+	prev := removeRegenerateFamilyFn
+	removeRegenerateFamilyFn = func(string) { regenCalls++ }
+	t.Cleanup(func() { removeRegenerateFamilyFn = prev })
+
+	svc := &config.CustomService{
+		Name:          "mariadb-10-11",
+		Image:         "docker.io/library/mariadb:10.11",
+		Preset:        "mariadb",
+		PresetVersion: "10.11",
+		Family:        "mariadb",
+	}
+	if err := config.SaveCustomService(svc); err != nil {
+		t.Fatalf("SaveCustomService: %v", err)
+	}
+
+	if err := ReinstallService("mariadb-10-11", false, func(PhaseEvent) {}); err != nil {
+		t.Fatalf("ReinstallService: %v", err)
+	}
+	if regenCalls != 0 {
+		t.Errorf("RegenerateFamilyConsumers must not fire during RemoveService on the reinstall path, got %d calls", regenCalls)
+	}
+}
+
+func TestRemoveService_SkipFamilyRegen_HonoursFlag(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+	stubPodmanRemove(t)
+
+	regenCalls := 0
+	prev := removeRegenerateFamilyFn
+	removeRegenerateFamilyFn = func(string) { regenCalls++ }
+	t.Cleanup(func() { removeRegenerateFamilyFn = prev })
+
+	mkSvc := func(name string) {
+		svc := &config.CustomService{
+			Name:   name,
+			Image:  "docker.io/test/" + name + ":latest",
+			Family: "regen-family",
+		}
+		if err := config.SaveCustomService(svc); err != nil {
+			t.Fatalf("SaveCustomService %s: %v", name, err)
+		}
+	}
+
+	mkSvc("regen-target")
+	if err := RemoveService("regen-target", RemoveOptions{SkipFamilyRegen: true}, func(PhaseEvent) {}); err != nil {
+		t.Fatalf("RemoveService: %v", err)
+	}
+	if regenCalls != 0 {
+		t.Errorf("SkipFamilyRegen=true should suppress regen, got %d calls", regenCalls)
+	}
+
+	mkSvc("regen-target-2")
+	if err := RemoveService("regen-target-2", RemoveOptions{}, func(PhaseEvent) {}); err != nil {
+		t.Fatalf("RemoveService: %v", err)
+	}
+	if regenCalls != 1 {
+		t.Errorf("default RemoveOptions should regen, got %d calls", regenCalls)
+	}
+}
+
 func TestMissingPresetDependencies_BuiltinNotInstalled_Reports(t *testing.T) {
 	// Pre-fix: any IsBuiltin(dep) dep was treated as always-satisfied,
 	// so a phpmyadmin reinstall would pass validate even with mysql
