@@ -2,6 +2,8 @@ package serviceops
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -67,6 +69,49 @@ func TestReinstallService_PreflightPullFailure_LeavesYAMLIntact(t *testing.T) {
 	}
 }
 
+func TestMissingPresetDependencies_BuiltinNotInstalled_Reports(t *testing.T) {
+	// Pre-fix: any IsBuiltin(dep) dep was treated as always-satisfied,
+	// so a phpmyadmin reinstall would pass validate even with mysql
+	// uninstalled, then crash in EnsureServiceRunning after RemoveService
+	// had already wiped phpmyadmin. The fix: built-in deps must have a
+	// quadlet on disk to count as installed.
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+
+	svc := &config.CustomService{
+		Name:      "phpmyadmin",
+		DependsOn: []string{"mysql"}, // mysql is a default preset (IsBuiltin true)
+	}
+	// No mysql quadlet on disk -> mysql is genuinely missing.
+	if missing := MissingPresetDependencies(svc); len(missing) != 1 || missing[0] != "mysql" {
+		t.Errorf("with no mysql quadlet, expected [mysql] missing, got %v", missing)
+	}
+}
+
+func TestMissingPresetDependencies_BuiltinInstalled_OK(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+
+	// Materialise a lerd-mysql.container so podman.QuadletInstalled returns true.
+	quadletDir := config.QuadletDir()
+	if err := os.MkdirAll(quadletDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(quadletDir, "lerd-mysql.container"), []byte("[Container]\nImage=docker.io/library/mysql:8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := &config.CustomService{
+		Name:      "phpmyadmin",
+		DependsOn: []string{"mysql"},
+	}
+	if missing := MissingPresetDependencies(svc); len(missing) != 0 {
+		t.Errorf("with lerd-mysql quadlet present, expected no missing deps, got %v", missing)
+	}
+}
+
 func TestCaptureReinstallSpec_UsesPresetFieldNotServiceName(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tmp)
@@ -122,12 +167,9 @@ func TestCaptureReinstallSpec_BackfillsPresetFromName_WhenYAMLLacksField(t *test
 	}
 }
 
-func TestRealReinstallInstall_CustomServicePath_RoutesViaPresetName(t *testing.T) {
-	// Verifies the bug fix: when reinstalling a non-canonical-version
-	// service, the install seam must receive spec.presetName="mariadb"
-	// (the source preset) so realReinstallInstall can call
-	// InstallPresetStreaming with the correct preset name, instead of
-	// "mariadb-10-11" which is not a preset and fails after RemoveService.
+func TestReinstallService_ForwardsPresetNameToInstallSeam(t *testing.T) {
+	// Composition-level check: ReinstallService passes spec.presetName
+	// (NOT the service name) to the install seam.
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tmp)
 	t.Setenv("XDG_DATA_HOME", tmp)
@@ -159,5 +201,39 @@ func TestRealReinstallInstall_CustomServicePath_RoutesViaPresetName(t *testing.T
 	}
 	if call.Version != "10.11" {
 		t.Errorf("install Version = %q, want 10.11", call.Version)
+	}
+}
+
+func TestRealReinstallInstall_CustomServicePath_CallsStreamingWithPresetName(t *testing.T) {
+	// Bug-fix coverage at the seam closest to the actual one-line fix:
+	// realReinstallInstall's custom-service branch must invoke the
+	// streaming fn with the PRESET name, not the service name. Pre-fix
+	// the call passed `name` ("mariadb-10-11") and InstallPresetStreaming
+	// errored with "unknown preset" AFTER RemoveService had run.
+	var captured struct {
+		name    string
+		version string
+	}
+	prev := reinstallStreamingFn
+	reinstallStreamingFn = func(name, version string, emit func(PhaseEvent)) (*config.CustomService, error) {
+		captured.name = name
+		captured.version = version
+		return &config.CustomService{Name: name}, nil
+	}
+	t.Cleanup(func() { reinstallStreamingFn = prev })
+
+	spec := reinstallSpec{
+		presetName: "mariadb",
+		version:    "10.11",
+		image:      "docker.io/library/mariadb:10.11",
+	}
+	if _, err := realReinstallInstall("mariadb-10-11", spec, func(PhaseEvent) {}); err != nil {
+		t.Fatalf("realReinstallInstall: %v", err)
+	}
+	if captured.name != "mariadb" {
+		t.Errorf("streaming fn name = %q, want %q (preset name, NOT service name)", captured.name, "mariadb")
+	}
+	if captured.version != "10.11" {
+		t.Errorf("streaming fn version = %q, want %q", captured.version, "10.11")
 	}
 }

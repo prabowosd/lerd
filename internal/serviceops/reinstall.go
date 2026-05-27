@@ -36,6 +36,10 @@ var (
 	reinstallReprovFn        = ReprovisionLinkedSites
 	reinstallValidateFn      = validateReinstall
 	reinstallPrefetchImageFn = realPrefetchImage
+	// reinstallStreamingFn lets tests of realReinstallInstall verify the
+	// custom-service path passes spec.presetName (NOT the service name) to
+	// the install streaming function, which is the actual routing fix.
+	reinstallStreamingFn = InstallPresetStreaming
 )
 
 // realPrefetchImage pulls the pinned image when it isn't already local so a
@@ -151,8 +155,16 @@ func captureReinstallSpec(name string) (reinstallSpec, error) {
 // path will run, without writing anything. Catches configuration errors that
 // would otherwise fail after RemoveService has already deleted the YAML and
 // quadlet, leaving the user with neither the old install nor the new one.
-// Default-preset and custom-service paths share the same validation so both
-// fail closed under the same conditions.
+//
+// Default-preset and custom-service paths share the same outer validation,
+// but the version-selection step mirrors each install path so the resolved
+// svc.DependsOn matches what the install will actually run against:
+//
+//   - custom service: install calls InstallPresetStreaming(spec.presetName,
+//     spec.version, ...) → preset.Resolve(version);
+//   - default preset: install calls EnsureDefaultPresetQuadletPinned which
+//     uses ResolvePinned(canonicalPin) from cfg.Services[name].CanonicalVersion,
+//     falling back to Resolve("") when no pin is recorded.
 func validateReinstall(name string, spec reinstallSpec) error {
 	if spec.presetName == "" {
 		return fmt.Errorf("service %q has no preset reference; cannot determine reinstall source", name)
@@ -161,21 +173,46 @@ func validateReinstall(name string, spec reinstallSpec) error {
 	if err != nil {
 		hint := ""
 		if spec.presetName == name {
-			hint = " (legacy YAML without `preset:` field — add `preset: <name>` pointing at a bundled preset)"
+			hint = " (legacy YAML without `preset:` field; add `preset: <name>` pointing at a bundled preset)"
 		}
 		return fmt.Errorf("preset %q (source of service %q) not found%s: %w", spec.presetName, name, hint, err)
 	}
 	if spec.version != "" && len(preset.Versions) == 0 {
 		return fmt.Errorf("preset %q does not declare versions, but service %q has preset_version=%q", spec.presetName, name, spec.version)
 	}
-	svc, err := preset.Resolve(spec.version)
+	svc, err := resolveForValidate(name, spec, preset)
 	if err != nil {
-		return fmt.Errorf("preset %q version %q: %w", spec.presetName, spec.version, err)
+		return err
 	}
 	if missing := MissingPresetDependencies(svc); len(missing) > 0 {
 		return fmt.Errorf("preset %q requires %s to be installed first", spec.presetName, strings.Join(missing, ", "))
 	}
 	return nil
+}
+
+// resolveForValidate picks the same preset version that the install path
+// would pick, so MissingPresetDependencies runs against the right svc.
+// Default presets read the canonical pin from global config (mirrors
+// EnsureDefaultPresetQuadletPinned); other paths use the captured version.
+func resolveForValidate(name string, spec reinstallSpec, preset *config.Preset) (*config.CustomService, error) {
+	if config.IsDefaultPreset(name) && len(preset.Versions) > 0 {
+		canonicalPin := ""
+		if cfg, _ := config.LoadGlobal(); cfg != nil {
+			canonicalPin = cfg.Services[name].CanonicalVersion
+		}
+		if canonicalPin != "" {
+			svc, err := preset.ResolvePinned(canonicalPin)
+			if err != nil {
+				return nil, fmt.Errorf("preset %q canonical pin %q: %w", spec.presetName, canonicalPin, err)
+			}
+			return svc, nil
+		}
+	}
+	svc, err := preset.Resolve(spec.version)
+	if err != nil {
+		return nil, fmt.Errorf("preset %q version %q: %w", spec.presetName, spec.version, err)
+	}
+	return svc, nil
 }
 
 // realReinstallInstall dispatches to the right install path based on whether
@@ -225,5 +262,5 @@ func realReinstallInstall(name string, spec reinstallSpec, emit func(PhaseEvent)
 		}
 		return &config.CustomService{Name: name}, nil
 	}
-	return InstallPresetStreaming(spec.presetName, spec.version, emit)
+	return reinstallStreamingFn(spec.presetName, spec.version, emit)
 }
