@@ -23,12 +23,13 @@ type RemoveOptions struct {
 	RemoveData bool
 
 	// SkipFamilyRegen suppresses the post-remove RegenerateFamilyConsumers
-	// pass. Set by reinstall, where the regen-during-remove would render a
-	// plist that doesn't include the service being reinstalled, briefly
-	// restart consumers against the partial plist, and lose to the second
-	// regen on certain timings (slow launchctl bootout, podman socket
-	// flake). The reinstall path lets the subsequent install's own regen
-	// do the work once, after the new YAML is on disk.
+	// pass. Set by ReinstallService, which then drives the regen itself
+	// after install: InstallPresetByName regenerates internally for custom
+	// services, while default-preset and failure paths call regen
+	// explicitly. The regen-during-remove was racing the post-install
+	// regen on macOS (launchctl bootout/bootstrap can fall through to
+	// kickstart which doesn't re-read the plist), leaving consumers on
+	// the partial plist.
 	SkipFamilyRegen bool
 }
 

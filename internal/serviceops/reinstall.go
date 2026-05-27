@@ -40,6 +40,11 @@ var (
 	// custom-service path passes spec.presetName (NOT the service name) to
 	// the install streaming function, which is the actual routing fix.
 	reinstallStreamingFn = InstallPresetStreaming
+	// reinstallFamilyRegenFn drives family-consumer regeneration outside
+	// of InstallPresetByName's internal call: default-preset reinstalls
+	// (where the install path doesn't regen) and the install-failure path
+	// (where consumers must sync to the post-Remove "target gone" state).
+	reinstallFamilyRegenFn = RegenerateFamilyConsumersForService
 )
 
 // realPrefetchImage pulls the pinned image when it isn't already local so a
@@ -100,24 +105,23 @@ func ReinstallService(name string, resetData bool, emit func(PhaseEvent)) error 
 		return fmt.Errorf("reinstall: pre-flight pull %q: %w", spec.image, err)
 	}
 
-	// SkipFamilyRegen because the regen-during-remove runs with the YAML
-	// already deleted: family consumers (e.g. phpmyadmin) would be
-	// rendered against a partial set, restarted against a partial plist,
-	// and rely on the subsequent install's regen to overwrite — which
-	// races with launchctl bootout/bootstrap on macOS. The custom-service
-	// install path (InstallPresetByName) regenerates once the new YAML is
-	// on disk; the default-preset path doesn't, so we trigger it ourselves
-	// below.
+	// Suppress regen-during-remove; we drive it ourselves below to
+	// eliminate the launchctl bootout/bootstrap race on macOS.
 	if err := RemoveService(name, RemoveOptions{RemoveData: resetData, SkipFamilyRegen: true}, emit); err != nil {
 		return fmt.Errorf("reinstall: remove step: %w", err)
 	}
 
 	if _, err := reinstallInstallFn(name, spec, emit); err != nil {
+		// Sync consumers to the post-Remove state so their plists stop
+		// referencing the deleted target.
+		reinstallFamilyRegenFn(name)
 		return fmt.Errorf("reinstall: install step: %w", err)
 	}
 
+	// InstallPresetByName regenerates internally for custom services;
+	// default-preset install doesn't, so do it here.
 	if config.IsDefaultPreset(name) {
-		RegenerateFamilyConsumersForService(name)
+		reinstallFamilyRegenFn(name)
 	}
 
 	if resetData {

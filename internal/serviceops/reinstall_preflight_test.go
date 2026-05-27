@@ -105,6 +105,98 @@ func TestReinstallService_SuppressesFamilyRegenDuringRemove(t *testing.T) {
 	}
 }
 
+func TestReinstallService_DefaultPreset_TriggersExplicitFamilyRegen(t *testing.T) {
+	// EnsureDefaultPresetQuadletPinned does not regen family consumers,
+	// so ReinstallService must do it explicitly after the install step.
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+	stubPodmanRemove(t)
+	rec := stubReinstallSeams(t)
+
+	// mysql is a default preset in the embedded bundle. Save a YAML so
+	// captureReinstallSpec's custom-service branch fires; routing falls
+	// through to the default-preset path because IsDefaultPreset("mysql")
+	// returns true.
+	svc := &config.CustomService{
+		Name:          "mysql",
+		Image:         "docker.io/library/mysql:8.4",
+		Preset:        "mysql",
+		PresetVersion: "8.4",
+		Family:        "mysql",
+	}
+	if err := config.SaveCustomService(svc); err != nil {
+		t.Fatalf("SaveCustomService: %v", err)
+	}
+
+	if err := ReinstallService("mysql", false, func(PhaseEvent) {}); err != nil {
+		t.Fatalf("ReinstallService: %v", err)
+	}
+	if len(rec.familyRegenCalls) != 1 || rec.familyRegenCalls[0] != "mysql" {
+		t.Errorf("default-preset reinstall should call family regen once with %q, got %v", "mysql", rec.familyRegenCalls)
+	}
+}
+
+func TestReinstallService_InstallFailure_TriggersFamilyRegen(t *testing.T) {
+	// When the install step fails, consumers' plists still reference
+	// the now-deleted target. ReinstallService must sync them to the
+	// post-Remove "target gone" state.
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+	stubPodmanRemove(t)
+	rec := stubReinstallSeams(t)
+	rec.installErr = errors.New("simulated install failure")
+
+	svc := &config.CustomService{
+		Name:          "mariadb-10-11",
+		Image:         "docker.io/library/mariadb:10.11",
+		Preset:        "mariadb",
+		PresetVersion: "10.11",
+		Family:        "mariadb",
+	}
+	if err := config.SaveCustomService(svc); err != nil {
+		t.Fatalf("SaveCustomService: %v", err)
+	}
+
+	err := ReinstallService("mariadb-10-11", false, func(PhaseEvent) {})
+	if err == nil {
+		t.Fatal("expected install failure to propagate")
+	}
+	if len(rec.familyRegenCalls) != 1 || rec.familyRegenCalls[0] != "mariadb-10-11" {
+		t.Errorf("install failure should call family regen once with %q, got %v", "mariadb-10-11", rec.familyRegenCalls)
+	}
+}
+
+func TestReinstallService_CustomServiceSuccess_NoExtraFamilyRegen(t *testing.T) {
+	// For a custom-service reinstall that succeeds, InstallPresetByName's
+	// internal regen handles family consumers. ReinstallService must NOT
+	// fire its explicit regen (which would double-regen).
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+	stubPodmanRemove(t)
+	rec := stubReinstallSeams(t)
+
+	svc := &config.CustomService{
+		Name:          "mariadb-10-11",
+		Image:         "docker.io/library/mariadb:10.11",
+		Preset:        "mariadb",
+		PresetVersion: "10.11",
+		Family:        "mariadb",
+	}
+	if err := config.SaveCustomService(svc); err != nil {
+		t.Fatalf("SaveCustomService: %v", err)
+	}
+
+	if err := ReinstallService("mariadb-10-11", false, func(PhaseEvent) {}); err != nil {
+		t.Fatalf("ReinstallService: %v", err)
+	}
+	if len(rec.familyRegenCalls) != 0 {
+		t.Errorf("custom-service success should not call the explicit family regen, got %v", rec.familyRegenCalls)
+	}
+}
+
 func TestRemoveService_SkipFamilyRegen_HonoursFlag(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tmp)
