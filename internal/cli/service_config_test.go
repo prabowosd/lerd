@@ -76,7 +76,7 @@ func TestServiceConfig_RejectsUntunedFamily(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveCustomService: %v", err)
 	}
-	fakeQuadletOnDisk(t, "redis")
+	fakeQuadletOnDisk(t, "meilisearch")
 
 	_, err := runServiceConfig(t, "meilisearch", "--path")
 	if err == nil || !strings.Contains(err.Error(), "does not support tuning") {

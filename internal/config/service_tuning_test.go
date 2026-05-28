@@ -35,6 +35,24 @@ func TestServiceTuningMount_KnownFamilies(t *testing.T) {
 	}
 }
 
+func TestTuningFamilies_SortedAndComplete(t *testing.T) {
+	families := TuningFamilies()
+	want := []string{"mariadb", "mysql", "postgres", "redis"}
+	if len(families) != len(want) {
+		t.Fatalf("TuningFamilies length = %d %v, want %d %v", len(families), families, len(want), want)
+	}
+	for i, f := range want {
+		if families[i] != f {
+			t.Errorf("TuningFamilies[%d] = %q, want %q (full result: %v)", i, families[i], f, families)
+		}
+	}
+	// Anchor the "supported: …" hint shape so the test catches accidental
+	// formatting drift (commas, spacing) when new families land.
+	if got := strings.Join(families, ", "); got != "mariadb, mysql, postgres, redis" {
+		t.Errorf("joined hint = %q, want %q", got, "mariadb, mysql, postgres, redis")
+	}
+}
+
 func TestResolveServiceForTuning(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
