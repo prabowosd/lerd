@@ -2430,7 +2430,11 @@ func handleSiteNginx(w http.ResponseWriter, r *http.Request, domain string) {
 	var req struct {
 		Content string `json:"content"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// Cap the POST body so a multi-gigabyte payload can't stream straight to
+	// disk via os.WriteFile. 64 KiB matches the tinker / php.ini / global
+	// nginx endpoints. nginx itself would reject an oversized server-block
+	// override only at reload time — after the bytes already landed.
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
