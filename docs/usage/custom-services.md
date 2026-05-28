@@ -75,6 +75,8 @@ lerd service config mariadb --no-restart
 
 Works for both custom services and built-in default presets (e.g. `lerd service preset install mariadb` then `lerd service config mariadb`). Currently the mysql and mariadb families are tunable (mounted at `/etc/mysql/conf.d/zz-lerd-user.cnf`); services without a tuning mount report that they are not supported yet.
 
+The service must already be installed — running `lerd service config <name>` against a service whose quadlet isn't on disk errors out with a hint to `lerd service preset install <name>` first, rather than silently reinstalling it as a side effect of an edit.
+
 ## YAML schema
 
 ```yaml

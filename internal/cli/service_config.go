@@ -7,6 +7,7 @@ import (
 
 	"github.com/geodro/lerd/internal/config"
 	"github.com/geodro/lerd/internal/podman"
+	"github.com/geodro/lerd/internal/serviceops"
 	"github.com/spf13/cobra"
 )
 
@@ -57,6 +58,14 @@ func newServiceConfigCmd() *cobra.Command {
 			svc, err := config.ResolveServiceForTuning(name)
 			if err != nil {
 				return err
+			}
+			// Install-presence guard: ResolveServiceForTuning falls back to the
+			// in-binary preset for default services, which would otherwise let
+			// `service config <name>` seed + regenerate + restart a quadlet for
+			// a service the user has explicitly removed — effectively a silent
+			// reinstall as a side effect of an edit command. Block that here.
+			if !serviceops.ServiceInstalled(name) {
+				return fmt.Errorf("service %q is not installed — run `lerd service preset install %s` first", name, name)
 			}
 			if _, ok := config.ServiceTuningMount(svc); !ok {
 				if fam := config.FamilyOf(svc); fam != "" {
