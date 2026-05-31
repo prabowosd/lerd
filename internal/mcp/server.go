@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/geodro/lerd/internal/certs"
+	"github.com/geodro/lerd/internal/composer"
 	"github.com/geodro/lerd/internal/config"
 	"github.com/geodro/lerd/internal/dns"
 	"github.com/geodro/lerd/internal/envfile"
@@ -2183,7 +2184,7 @@ func execComposer(args map[string]any) (any, *rpcError) {
 	short := strings.ReplaceAll(phpVersion, ".", "")
 	container := "lerd-php" + short + "-fpm"
 
-	cmdArgs := []string{"exec", "-w", projectPath, container, "composer"}
+	cmdArgs := []string{"exec", "-w", projectPath, "--env", composer.ProcessTimeoutEnv(), container, "composer"}
 	cmdArgs = append(cmdArgs, composerArgs...)
 
 	var out bytes.Buffer
@@ -4959,7 +4960,7 @@ func runComposerInstallIfNeeded(projectPath string, out *bytes.Buffer) error {
 	container := "lerd-php" + strings.ReplaceAll(phpVersion, ".", "") + "-fpm"
 
 	out.WriteString("\n\n--- composer install ---\n")
-	cmd := podman.Cmd("exec", "-w", projectPath, container, "composer", "install", "--no-interaction")
+	cmd := podman.Cmd("exec", "-w", projectPath, "--env", composer.ProcessTimeoutEnv(), container, "composer", "install", "--no-interaction")
 	cmd.Stdout = out
 	cmd.Stderr = out
 	return cmd.Run()
