@@ -23,16 +23,21 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// NewDoctorCmd returns the doctor command.
+// NewDoctorCmd returns the doctor command. With no argument it diagnoses the
+// lerd environment; given a site name it reports that site's app-level health.
 func NewDoctorCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "doctor",
-		Short: "Diagnose your Lerd environment and report issues",
+		Use:   "doctor [site]",
+		Short: "Diagnose your Lerd environment, or a single site's app health",
+		Args:  cobra.MaximumNArgs(1),
 		RunE:  runDoctor,
 	}
 }
 
-func runDoctor(_ *cobra.Command, _ []string) error {
+func runDoctor(_ *cobra.Command, args []string) error {
+	if len(args) == 1 {
+		return RunSiteDoctorTo(os.Stdout, feedback.Animated(), args[0])
+	}
 	_, _, err := RunDoctorTo(os.Stdout, feedback.Animated())
 	return err
 }
